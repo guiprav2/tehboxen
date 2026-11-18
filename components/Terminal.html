@@ -1,0 +1,221 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Terminal.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="Terminal"
+        class="flex flex-col overflow-hidden shadow-2xl shadow-emerald-900/40 border border-white/30 text-white bg-[#1a1b26]/70 backdrop-blur-xl w-[780px] h-[480px] shrink-0 rounded-3xl"
+        wf-class="{{this.win.frameClass}}"
+        wf-onclick="post('desktop.focusApp', this.winId)"
+        wf-ondetach="post('desktop.unregisterWindow', this.winId)"
+        wf-onattach="post('desktop.registerWindow', this.winId)"
+      >
+        <div
+          class="h-10 shrink-0 flex items-center gap-2 px-3 text-[#c0caf5] cursor-grab active:cursor-grabbing border-b border-white/10 max-md:hidden bg-[#24283b]/75 backdrop-blur-md"
+          wf-onpointerdown="post('desktop.startDrag', this.winId, event)"
+        >
+          <div
+            class="size-6 rounded-md bg-[#50fa7b]/20 flex items-center justify-center text-sm text-[#50fa7b]"
+          >
+            <i class="nf nf-md-console"></i>
+          </div>
+          <div class="flex-1 text-sm font-semibold truncate">Terminal</div>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/10 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf text-xs nf-cod-chrome_minimize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/10 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf text-xs nf-cod-chrome_maximize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.closeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf nf-md-close text-xs"></i>
+          </button>
+        </div>
+        <div class="flex-1 min-h-0 overflow-hidden p-1">
+          <div
+            class="relative h-full w-full min-h-0 overflow-hidden"
+            wf-ondetach="this.post('onDetach')"
+            wf-onattach="this.post('onAttach', _1)"
+          ></div>
+        </div>
+        <div
+          class="hidden max-md:flex flex-col shrink-0 border-t border-white/15 select-none touch-manipulation bg-[#16161e]/80 backdrop-blur-md"
+          data-term-keybar="1"
+        >
+          <div class="flex gap-0.5 p-0.5 pb-0">
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','ESC')"
+              value=""
+            >
+              ESC
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','/')"
+              value=""
+            >
+              /
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','-')"
+              value=""
+            >
+              -
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','HOME')"
+              value=""
+            >
+              HOME
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','UP')"
+              value=""
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','END')"
+              value=""
+            >
+              END
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','PGUP')"
+              value=""
+            >
+              PGUP
+            </button>
+          </div>
+          <div class="flex gap-0.5 p-0.5">
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','TAB')"
+              value=""
+            >
+              TAB
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-class="{{this.s.modCtrl ? 'bg-[#7aa2f7] text-[#1a1b26] border-[#7aa2f7]' : ''}}"
+              wf-onclick="this.post('toggleCtrl')"
+              value=""
+            >
+              CTRL
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-class="{{this.s.modAlt ? 'bg-[#bb9af7] text-[#1a1b26] border-[#bb9af7]' : ''}}"
+              wf-onclick="this.post('toggleAlt')"
+              value=""
+            >
+              ALT
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','LEFT')"
+              value=""
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','DOWN')"
+              value=""
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','RIGHT')"
+              value=""
+            >
+              →
+            </button>
+            <button
+              type="button"
+              class="h-8 flex-1 min-w-0 rounded-md bg-[#24283b] active:bg-[#414868] text-[11px] font-semibold text-[#c0caf5] border border-white/10"
+              wf-onclick="this.post('pressKey','PGDN')"
+              value=""
+            >
+              PGDN
+            </button>
+          </div>
+        </div>
+        <div
+          class="absolute right-0 bottom-0 size-4 cursor-se-resize max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'se', event)"
+        ></div>
+        <div
+          class="absolute top-10 right-0 bottom-4 w-1.5 cursor-e-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'e', event)"
+        ></div>
+        <div
+          class="absolute left-0 right-4 bottom-0 h-1.5 cursor-s-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 's', event)"
+        ></div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "name": "tehboxen",
+  "version": "1.0.0",
+  "main": "wf.config.js",
+  "scripts": {
+    "dbgserver": "node bin/dbgserver.mjs",
+    "dbgserver:restart": "fuser -k 8766/tcp 2>/dev/null; sleep 0.3; node bin/dbgserver.mjs",
+    "watch-npc": "node bin/watch-npc.mjs",
+    "watch-relay": "node bin/watch-relay.mjs",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "type": "module",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "chokidar": "^6.0.0",
+    "express": "^5.3.0",
+    "multer": "^2.5.0",
+    "ws": "^8.23.0"
+  }
+}

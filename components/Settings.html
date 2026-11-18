@@ -1,0 +1,203 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Settings.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="Settings"
+        class="flex flex-col overflow-hidden shadow-2xl shadow-sky-900/40 border border-white/40 bg-zinc-900/90 backdrop-blur text-zinc-200 w-[560px] h-[440px] shrink-0 rounded-3xl"
+        wf-onattach="post('desktop.registerWindow', 'settings')"
+        wf-ondetach="post('desktop.unregisterWindow', 'settings')"
+        wf-onclick="post('desktop.focusApp', 'settings')"
+        wf-class="{{state.desktop.apps.settings.frameClass}}"
+        =""
+        =""
+      >
+        <div
+          class="h-10 shrink-0 flex items-center gap-2 px-3 bg-gradient-to-r from-sky-400 to-cyan-400 text-white cursor-grab active:cursor-grabbing"
+          wf-onpointerdown="post('desktop.startDrag', 'settings', event)"
+        >
+          <div
+            class="size-6 rounded-md bg-zinc-900/20 flex items-center justify-center text-sm"
+          >
+            <i class="nf nf-md-palette"></i>
+          </div>
+          <div class="flex-1 text-sm font-semibold truncate">
+            Wallpaper Studio
+          </div>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', 'settings'))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf text-xs nf-cod-chrome_minimize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', 'settings'))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf text-xs nf-cod-chrome_maximize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.closeApp', 'settings'))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf nf-md-close text-xs"></i>
+          </button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-5">
+          <div class="gfont-[Share_Tech_Mono] text-2xl text-cyan-500 mb-1">
+            make it prettier
+          </div>
+          <div class="text-sm text-zinc-500 mb-4">
+            What's on your desktop now — or pick a preset below.
+          </div>
+          <div
+            class="mb-4 rounded-2xl border border-cyan-800/80 bg-gradient-to-br from-cyan-950 to-sky-950 shadow-sm overflow-hidden"
+          >
+            <div class="px-4 pt-3 pb-2 flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div
+                  class="text-[10px] uppercase tracking-wider text-cyan-500 font-semibold"
+                >
+                  On your desktop
+                </div>
+                <div class="text-sm font-bold text-zinc-200 truncate">
+                  {{state.desktop.wallpaperName}}
+                </div>
+                <div class="text-[11px] text-zinc-500 capitalize">
+                  {{state.desktop.wallpaperKind}}
+                </div>
+              </div>
+              <button
+                type="button"
+                class="shrink-0 h-9 px-3 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 text-white text-xs font-semibold shadow-sm hover:opacity-95 flex items-center gap-1.5"
+                wf-onclick="post('desktop.pickCustomWallpaper')"
+                value=""
+              >
+                <i class="nf nf-md-folder_image text-sm"></i>
+                <span
+                  >{{state.desktop.wallpaperId === 'custom' ? 'Change file' : 'Use a file'}}</span
+                >
+              </button>
+            </div>
+            <div
+              class="mx-4 mb-4 h-36 rounded-xl overflow-hidden relative bg-emerald-800 border border-white/70 shadow-inner"
+              wf-map="wid of [state.desktop.wallpaperId]"
+            >
+              <img
+                class="absolute inset-0 w-full h-full object-cover"
+                alt=""
+                wf-if="state.desktop.wallpaperKind === 'image'"
+                wf-onattach="(async()=&gt;{let s=(rawctrls.desktop.actions.currentWallpaper()||{}).src||'';_1.src=await rawctrls.desktop.actions.warmMediaUrl(s)||rawctrls.desktop.actions.mediaUrl(s)})()"
+              />
+              <video
+                class="absolute inset-0 w-full h-full object-cover"
+                muted=""
+                loop=""
+                playsinline=""
+                autoplay=""
+                wf-if="state.desktop.wallpaperKind === 'video'"
+                wf-onattach="(async()=&gt;{_1.muted=true;_1.defaultMuted=true;let s=(rawctrls.desktop.actions.currentWallpaper()||{}).src||'';_1.src=await rawctrls.desktop.actions.warmMediaUrl(s)||rawctrls.desktop.actions.mediaUrl(s);(_1.play()||Promise.resolve()).catch(()=&gt;{})})()"
+              ></video>
+              <div
+                class="absolute inset-0"
+                wf-if="state.desktop.wallpaperKind === 'gradient'"
+                wf-onattach="(_1.style.backgroundImage = rawctrls.desktop.actions._twGradientToCss(((rawctrls.desktop.actions.currentWallpaper() || {}).tw) || ''))"
+              ></div>
+            </div>
+          </div>
+          <div
+            class="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold mb-2 mt-1"
+          >
+            Presets
+          </div>
+          <div
+            class="@container/wallpapers grid grid-cols-1 @min-[360px]:grid-cols-2 @min-[560px]:grid-cols-3 gap-3"
+          >
+            <button
+              class="rounded-2xl overflow-hidden border-2 text-left hover:scale-[1.02] transition-transform shadow-md"
+              wf-map="w of state.desktop.wallpapers.filter(x =&gt; x.id !== 'custom')"
+              wf-onclick="post('desktop.setWallpaper', w.id)"
+              wf-class="{{state.desktop.wallpaperId === w.id ? 'border-cyan-500 ring-2 ring-cyan-700' : 'border-white'}}"
+              value=""
+            >
+              <div class="h-24 bg-cover bg-center relative overflow-hidden">
+                <img
+                  wf-if="w.type === 'image'"
+                  class="w-full h-24 object-cover"
+                  alt=""
+                  wf-onattach="(async()=&gt;{_1.src=await rawctrls.desktop.actions.warmMediaUrl(w.src)||rawctrls.desktop.actions.mediaUrl(w.src)})()"
+                /><video
+                  wf-if="w.type === 'video'"
+                  class="w-full h-24 object-cover"
+                  muted=""
+                  loop=""
+                  playsinline=""
+                  autoplay=""
+                  wf-onattach="(async()=&gt;{_1.muted=true;_1.defaultMuted=true;_1.src=await rawctrls.desktop.actions.warmMediaUrl(w.src)||rawctrls.desktop.actions.mediaUrl(w.src);(_1.play()||Promise.resolve()).catch(()=&gt;{})})()"
+                ></video>
+                <div
+                  wf-if="w.type === 'gradient'"
+                  class="w-full h-24"
+                  wf-onattach="_1.style.backgroundImage = rawctrls.desktop.actions._twGradientToCss(w.tw)"
+                ></div>
+              </div>
+
+              <div class="px-3 py-2 bg-zinc-900/90">
+                <div class="text-sm font-bold text-zinc-300">{{w.name}}</div>
+                <div class="text-[10px] uppercase tracking-wider text-cyan-400">
+                  {{w.type}}
+                </div>
+              </div>
+            </button>
+          </div>
+        </div>
+        <div
+          class="absolute right-0 bottom-0 size-4 cursor-se-resize max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', 'settings', 'se', event)"
+        ></div>
+        <div
+          class="absolute top-10 right-0 bottom-4 w-1.5 cursor-e-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', 'settings', 'e', event)"
+        ></div>
+        <div
+          class="absolute left-0 right-4 bottom-0 h-1.5 cursor-s-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', 'settings', 's', event)"
+        ></div>
+      </div>
+    </div>
+  </body>
+</html>

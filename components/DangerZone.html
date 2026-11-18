@@ -1,0 +1,209 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>DangerZone.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      id="DangerZone"
+      class="flex flex-col overflow-hidden shadow-2xl shadow-red-950/50 border border-red-400/30 bg-[#1a080c] text-white shrink-0 rounded-3xl @container/app"
+      wf-class="{{this.win.frameClass}}"
+      wf-onclick="post('desktop.focusApp', this.winId)"
+      wf-onattach="await post('dangerZone.onAttach', _1, this.winId)"
+      wf-ondetach="post('dangerZone.onDetach')"
+    >
+      <div
+        class="h-10 shrink-0 flex items-center gap-2 px-3 bg-gradient-to-r from-teal-700 to-red-600 text-white cursor-grab active:cursor-grabbing"
+        wf-onpointerdown="post('desktop.startDrag', this.winId, event)"
+      >
+        <div
+          class="size-6 rounded-md bg-black/30 flex items-center justify-center text-sm"
+        >
+          <i class="nf nf-md-skull_crossbones"></i>
+        </div>
+        <div class="flex-1 text-sm font-semibold truncate">Danger Zone</div>
+        <button
+          class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+          wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', this.winId))"
+          wf-onpointerdown="event.stopPropagation()"
+          value=""
+        >
+          <i class="nf text-xs nf-cod-chrome_minimize"></i>
+        </button>
+        <button
+          class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+          wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', this.winId))"
+          wf-onpointerdown="event.stopPropagation()"
+          value=""
+        >
+          <i class="nf text-xs nf-cod-chrome_maximize"></i>
+        </button>
+        <button
+          class="size-7 rounded-full hover:bg-black/40 flex items-center justify-center max-md:hidden"
+          wf-onclick="(event.stopPropagation(), post('desktop.closeApp', this.winId))"
+          wf-onpointerdown="event.stopPropagation()"
+          value=""
+        >
+          <i class="nf nf-md-close text-xs"></i>
+        </button>
+      </div>
+
+      <div class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+        <p class="text-xs text-red-100/70 leading-relaxed">
+          Full VFS backup and restore. Packs are ZIPs with no executable guest
+          code — safe to share as world / character / place packs. Import always
+          overwrites colliding paths.
+        </p>
+
+        <!-- Export -->
+        <section
+          class="rounded-2xl border border-white/10 bg-zinc-900/5 p-3 space-y-2"
+        >
+          <h2 class="text-sm font-bold text-teal-200 flex items-center gap-2">
+            <i class="nf nf-md-export"></i> Export world pack
+          </h2>
+          <label class="block text-[11px] text-white/50">Pack title</label>
+          <input
+            class="w-full h-9 px-3 rounded-xl bg-black/40 border border-white/10 text-sm outline-none focus:border-teal-400/60"
+            wf-value="state.dangerZone.packTitle"
+            placeholder="Tehboxen World"
+            value=""
+          />
+          <button
+            class="w-full h-9 rounded-xl bg-teal-600 hover:bg-teal-500 text-sm font-semibold disabled:opacity-40"
+            wf-onclick="post('dangerZone.exportPack')"
+            wf-disabled="state.dangerZone.busy"
+            value=""
+          >
+            Download ZIP
+          </button>
+        </section>
+
+        <!-- Import -->
+        <section
+          class="rounded-2xl border border-amber-400/20 bg-amber-950/30 p-3 space-y-2"
+        >
+          <h2 class="text-sm font-bold text-amber-200 flex items-center gap-2">
+            <i class="nf nf-md-import"></i> Import pack
+          </h2>
+          <p class="text-[11px] text-amber-100/60">
+            <b>Merge</b> keeps files not in the pack; paths present in the pack
+            are overwritten. <b>Replace</b> wipes the entire VFS first, then
+            loads the pack.
+          </p>
+          <div class="flex gap-2">
+            <button
+              class="flex-1 h-8 rounded-lg text-xs font-semibold border"
+              wf-onclick="post('dangerZone.setImportMode', 'merge')"
+              wf-class="{{state.dangerZone.importMode === 'merge' ? 'bg-amber-500/30 border-amber-700 text-amber-50' : 'bg-black/20 border-white/10 text-white/60'}}"
+              value=""
+            >
+              Merge
+            </button>
+            <button
+              class="flex-1 h-8 rounded-lg text-xs font-semibold border"
+              wf-onclick="post('dangerZone.setImportMode', 'replace')"
+              wf-class="{{state.dangerZone.importMode === 'replace' ? 'bg-red-500/40 border-red-700 text-red-50' : 'bg-black/20 border-white/10 text-white/60'}}"
+              value=""
+            >
+              Replace all
+            </button>
+          </div>
+          <label class="block text-[11px] text-white/50"
+            >Type {{state.dangerZone.importMode === 'replace' ? 'REPLACE' : 'MERGE'}} to confirm</label
+          >
+          <input
+            class="w-full h-9 px-3 rounded-xl bg-black/40 border border-white/10 text-sm outline-none focus:border-amber-400/60 font-mono tracking-wider"
+            wf-value="state.dangerZone.confirmImport"
+            placeholder="MERGE or REPLACE"
+            value=""
+          />
+          <button
+            class="w-full h-9 rounded-xl bg-amber-600 hover:bg-amber-500 text-sm font-semibold disabled:opacity-40"
+            wf-onclick="post('dangerZone.pickImportFile')"
+            wf-disabled="state.dangerZone.busy"
+            value=""
+          >
+            Choose ZIP…
+          </button>
+        </section>
+
+        <!-- Factory reset -->
+        <section
+          class="rounded-2xl border border-red-500/40 bg-red-950/40 p-3 space-y-2"
+        >
+          <h2 class="text-sm font-bold text-red-300 flex items-center gap-2">
+            <i class="nf nf-md-bomb"></i> Factory reset
+          </h2>
+          <p class="text-[11px] text-red-100/60">
+            Erase the whole VFS and reseed the demo world. This cannot be undone
+            (export first).
+          </p>
+          <label class="block text-[11px] text-white/50"
+            >Type RESET to confirm</label
+          >
+          <input
+            class="w-full h-9 px-3 rounded-xl bg-black/40 border border-white/10 text-sm outline-none focus:border-red-400/60 font-mono tracking-wider"
+            wf-value="state.dangerZone.confirmReset"
+            placeholder="RESET"
+            value=""
+          />
+          <button
+            class="w-full h-9 rounded-xl bg-red-700 hover:bg-red-600 text-sm font-semibold disabled:opacity-40"
+            wf-onclick="post('dangerZone.factoryReset')"
+            wf-disabled="state.dangerZone.busy"
+            value=""
+          >
+            Wipe &amp; reseed
+          </button>
+        </section>
+
+        <div
+          class="text-[11px] text-emerald-300/90"
+          wf-if="state.dangerZone.status"
+        >
+          {{state.dangerZone.status}}
+        </div>
+        <div class="text-[11px] text-teal-300" wf-if="state.dangerZone.error">
+          {{state.dangerZone.error}}
+        </div>
+      </div>
+
+      <div
+        class="h-3 shrink-0 cursor-ns-resize max-md:hidden"
+        wf-onpointerdown="post('desktop.startResize', this.winId, 's', event)"
+      ></div>
+      <div
+        class="w-3 absolute right-0 top-10 bottom-0 cursor-ew-resize max-md:hidden"
+        wf-onpointerdown="post('desktop.startResize', this.winId, 'e', event)"
+      ></div>
+      <div
+        class="size-4 absolute right-0 bottom-0 cursor-nwse-resize max-md:hidden"
+        wf-onpointerdown="post('desktop.startResize', this.winId, 'se', event)"
+      ></div>
+    </div>
+  </body>
+</html>

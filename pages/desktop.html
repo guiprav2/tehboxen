@@ -1,0 +1,543 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Desktop</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div class="min-h-0 overflow-hidden">
+      <div
+        class="relative overflow-hidden flex flex-col gfont-[JetBrains_Mono] text-white select-none bg-emerald-700 min-h-0 bg-cover bg-center h-[var(--vv-h,100dvh)] translate-y-[var(--vv-top,0px)]"
+        wf-onattach="post('desktop.init')"
+        data-desktop-root=""
+      >
+        <div
+          class="absolute top-0 inset-x-0 z-[60] h-7 px-3 flex items-center justify-between text-[11px] font-semibold tracking-wide bg-black/40 backdrop-blur-md text-white md:hidden touch-none cursor-pointer"
+          wf-if="state.desktop.phoneMode"
+          wf-onpointerdown="post('desktop.statusPointerDown', event)"
+        >
+          <div class="flex items-center gap-2 min-w-0 overflow-hidden">
+            <span class="tabular-nums">{{state.desktop.clock}}</span
+            ><i
+              class="nf text-[11px] opacity-90"
+              wf-map="a of state.desktop.shadeIcons"
+              wf-class="{{a.icon}}"
+            ></i>
+          </div>
+          <div class="flex items-center gap-2.5">
+            <i class="nf nf-md-wifi text-xs"></i
+            ><i class="nf nf-md-signal text-xs"></i
+            ><span class="tabular-nums overflow-hidden text-ellipsis max-w-8"
+              >{{state.desktop.statusBattery}}%</span
+            ><i class="nf nf-md-battery text-xs"></i>
+          </div>
+        </div>
+        <div
+          class="pointer-events-none absolute inset-0 -z-0"
+          data-wallpaper=""
+        >
+          <div
+            data-wallpaper-layer="a"
+            class="absolute inset-0 bg-cover bg-center bg-emerald-700 transition-opacity duration-500 ease-out opacity-100"
+          ></div>
+          <video
+            data-wallpaper-video="a"
+            class="absolute inset-0 w-full h-full object-cover transition-opacity duration-500 ease-out opacity-0"
+            muted=""
+            loop=""
+            playsinline=""
+            autoplay=""
+          ></video>
+          <div
+            data-wallpaper-layer="b"
+            class="absolute inset-0 bg-cover bg-center bg-emerald-700 transition-opacity duration-500 ease-out opacity-0"
+          ></div>
+          <video
+            data-wallpaper-video="b"
+            class="absolute inset-0 w-full h-full object-cover transition-opacity duration-500 ease-out opacity-0"
+            muted=""
+            loop=""
+            playsinline=""
+            autoplay=""
+          ></video>
+        </div>
+        <!-- soft overlay sheen -->
+        <div
+          class="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/20 via-transparent to-cyan-900/20"
+        ></div>
+
+        <!-- desktop icons -->
+        <div
+          class="relative z-10 p-4 max-md:pt-10 md:p-6 grid grid-cols-4 max-md:gap-4 md:grid-cols-none md:grid-flow-col md:auto-cols-max md:gap-5 md:grid-rows-5 items-start justify-items-center content-start w-full max-w-lg max-md:mx-auto md:max-w-none"
+        >
+          <button
+            class="w-24 flex flex-col items-center gap-2 group cursor-pointer max-md:w-20"
+            wf-onclick="post('desktop.openApp', 'explorer')"
+            value=""
+          >
+            <div
+              class="size-14 rounded-2xl text-[#1e1e2e] shadow-lg shadow-emerald-500/30 flex items-center justify-center text-3xl group-hover:scale-105 transition-transform border border-white/40 bg-black"
+            >
+              <i class="nf nf-md-folder text-[#50fa7b]"></i>
+            </div>
+            <span
+              class="text-xs font-semibold text-center drop-shadow-md px-1 rounded bg-black/25"
+              >Explorer</span
+            ></button
+          ><button
+            class="w-24 flex flex-col items-center gap-2 group cursor-pointer max-md:w-20"
+            wf-onclick="post('desktop.openApp', 'terminal')"
+            value=""
+          >
+            <div
+              class="size-14 rounded-2xl bg-[#1a1b26] shadow-lg shadow-emerald-500/30 flex items-center justify-center text-3xl group-hover:scale-105 transition-transform border border-white/40 text-[#50fa7b]"
+            >
+              <i class="nf nf-md-console"></i>
+            </div>
+            <span
+              class="text-xs font-semibold text-center drop-shadow-md px-1 rounded bg-black/25"
+              >Terminal</span
+            ></button
+          ><button
+            class="w-24 flex flex-col items-center gap-2 group cursor-pointer max-md:w-20"
+            wf-onclick="post('desktop.openApp', 'settings')"
+            value=""
+          >
+            <div
+              class="size-14 rounded-2xl bg-gradient-to-br from-sky-400 to-cyan-400 shadow-lg shadow-emerald-500/30 flex items-center justify-center text-3xl group-hover:scale-105 transition-transform border border-white/40"
+            >
+              <i class="nf nf-md-palette"></i>
+            </div>
+            <span
+              class="text-xs font-semibold text-center drop-shadow-md px-1 rounded bg-black/25"
+              >Wallpapers</span
+            ></button
+          ><button
+            class="w-24 flex flex-col items-center gap-2 group cursor-pointer max-md:w-20"
+            wf-onclick="post('desktop.openApp', 'relay')"
+            value=""
+          >
+            <div
+              class="size-14 rounded-2xl bg-[#25D366] shadow-lg shadow-emerald-500/30 flex items-center justify-center text-3xl group-hover:scale-105 transition-transform border border-white/40 relative"
+            >
+              <i class="nf nf-md-message_lock"></i>
+              <span
+                class="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[11px] font-bold leading-5 text-center shadow-md ring-2 ring-white/80 pointer-events-none overflow-hidden text-ellipsis aspect-square"
+                wf-if="state.desktop.unread.relay"
+                >{{state.desktop.unread.relay &gt; 9 ? '9+' : state.desktop.unread.relay}}</span
+              >
+            </div>
+            <span
+              class="text-xs font-semibold text-center drop-shadow-md px-1 rounded bg-black/25"
+              >Relay</span
+            >
+          </button>
+
+          <button
+            class="w-24 flex flex-col items-center gap-2 group cursor-pointer max-md:w-20"
+            wf-onclick="post('desktop.openApp', 'mail')"
+            value=""
+          >
+            <div
+              class="size-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-500 shadow-lg shadow-emerald-500/30 flex items-center justify-center text-3xl group-hover:scale-105 transition-transform border border-white/40 relative"
+            >
+              <i class="nf nf-md-email"></i>
+              <span
+                class="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[11px] font-bold leading-5 text-center shadow-md ring-2 ring-white/80 pointer-events-none overflow-hidden text-ellipsis aspect-square"
+                wf-if="state.desktop.unread.mail"
+                >{{state.desktop.unread.mail &gt; 9 ? '9+' : state.desktop.unread.mail}}</span
+              >
+            </div>
+            <span
+              class="text-xs font-semibold text-center drop-shadow-md px-1 rounded bg-black/25"
+              >BoxMail</span
+            ></button
+          ><button
+            class="w-24 flex flex-col items-center gap-2 group cursor-pointer max-md:w-20"
+            wf-onclick="post('desktop.openApp', 'places')"
+            value=""
+          >
+            <div
+              class="size-14 rounded-2xl bg-gradient-to-br from-cyan-500 to-sky-600 shadow-lg shadow-emerald-500/30 flex items-center justify-center text-3xl group-hover:scale-105 transition-transform border border-white/40"
+            >
+              <i class="nf nf-md-map text-white"></i>
+            </div>
+            <span
+              class="text-xs font-semibold text-center drop-shadow-md px-1 rounded bg-black/25"
+              >Places</span
+            ></button
+          ><button
+            class="w-24 flex flex-col items-center gap-2 group cursor-pointer max-md:w-20"
+            wf-onclick="post('desktop.openApp', 'editor')"
+            value=""
+          >
+            <div
+              class="size-14 rounded-2xl bg-[#89b4fa] text-[#1e1e2e] shadow-lg shadow-emerald-500/30 flex items-center justify-center text-3xl group-hover:scale-105 transition-transform border border-white/40"
+            >
+              <i class="nf nf-md-file_document_edit text-white"></i>
+            </div>
+            <span
+              class="text-xs font-semibold text-center drop-shadow-md px-1 rounded bg-black/25"
+              >Editor</span
+            ></button
+          ><button
+            class="flex flex-col items-center gap-1.5 w-[4.5rem] group"
+            wf-onclick="post('desktop.openApp', 'winzip')"
+            value=""
+          >
+            <div
+              class="size-12 rounded-2xl bg-zinc-900/25 backdrop-blur-md border border-white/40 shadow-lg shadow-emerald-900/20 flex items-center justify-center group-hover:scale-105 transition-transform"
+            >
+              <i class="nf nf-md-zip_box text-[#f9e2af] text-2xl"></i>
+            </div>
+            <span
+              class="text-xs font-semibold text-center drop-shadow-md px-1 rounded bg-black/25"
+              >WinZip</span
+            ></button
+          ><button
+            class="w-24 flex flex-col items-center gap-2 group cursor-pointer max-md:w-20"
+            wf-onclick="post('desktop.openApp', 'dangerZone')"
+            value=""
+          >
+            <div
+              class="size-14 rounded-2xl bg-gradient-to-br from-teal-700 to-red-500 shadow-lg shadow-red-900/40 flex items-center justify-center text-3xl group-hover:scale-105 transition-transform border border-white/40 text-red-100"
+            >
+              <i class="nf nf-md-skull_crossbones"></i>
+            </div>
+            <span
+              class="text-xs font-semibold text-center drop-shadow-md px-1 rounded bg-black/25"
+              >Danger</span
+            >
+          </button>
+        </div>
+        <div class="flex-1"></div>
+
+        <!-- corner branding -->
+        <div
+          class="pointer-events-none absolute top-5 right-6 z-10 text-right max-md:hidden"
+        >
+          <div
+            class="gfont-[Share_Tech_Mono] text-3xl text-white drop-shadow-lg"
+          >
+            Tehboxen
+          </div>
+          <div class="text-xs tracking-widest uppercase opacity-90 drop-shadow">
+            operator console
+          </div>
+        </div>
+
+        <!-- WINDOWS -->
+        <!-- Relay -->
+
+        <!-- BoxMail -->
+
+        <!-- Wallpaper Studio -->
+
+        <!-- Taskbar -->
+        <div
+          class="absolute bottom-0 inset-x-0 z-[60] h-14 px-8 flex items-center justify-around bg-black/45 backdrop-blur-xl border-t border-white/15 md:hidden"
+          wf-if="state.desktop.phoneMode"
+        >
+          <button
+            class="size-12 rounded-full flex items-center justify-center text-white/90 active:bg-zinc-900/15"
+            wf-onclick="post('desktop.navBack')"
+            title="Back"
+            value=""
+          >
+            <i class="nf nf-md-arrow_left text-2xl"></i></button
+          ><button
+            class="size-12 rounded-full flex items-center justify-center text-white/90 active:bg-zinc-900/15"
+            wf-onclick="post('desktop.navHome')"
+            value=""
+            title="Home"
+          >
+            <i class="nf nf-md-circle_outline text-2xl"></i></button
+          ><button
+            class="size-12 rounded-full flex items-center justify-center text-white/90 active:bg-zinc-900/15"
+            wf-onclick="post('desktop.navRecents')"
+            value=""
+            title="Recents"
+          >
+            <i class="nf nf-md-square_outline text-xl"></i>
+          </button>
+        </div>
+        <div
+          class="absolute inset-0 z-[70] bg-black/60 backdrop-blur-md flex flex-col md:hidden"
+          wf-if="state.desktop.phoneMode &amp;&amp; state.desktop.recentsOpen"
+          hidden=""
+        >
+          <div class="h-7 shrink-0"></div>
+          <div
+            class="flex-1 flex items-center justify-center px-6 touch-none select-none"
+            wf-onpointerdown="post('desktop.recentsPointerDown', event)"
+          >
+            <div
+              class="w-full max-w-sm rounded-[2rem] bg-neutral-950/95 border border-white/20 shadow-2xl p-8 flex flex-col items-center gap-5"
+            >
+              <div
+                class="size-24 rounded-[1.75rem] flex items-center justify-center text-5xl text-white shadow-lg border border-white/20 bg-emerald-500"
+                wf-class='{{(state.desktop.wins[state.desktop.recentsCurrentId]||{}).accentTw || "bg-emerald-500"}}'
+              >
+                <i
+                  class="nf text-white"
+                  wf-class='{{(state.desktop.wins[state.desktop.recentsCurrentId]||{}).icon || ""}}'
+                ></i>
+              </div>
+              <div class="text-xl font-semibold text-center">
+                {{(state.desktop.wins[state.desktop.recentsCurrentId]||{}).shortTitle || 'App'}}
+              </div>
+              <div
+                class="text-[11px] text-white/45 text-center leading-relaxed"
+              >
+                Swipe left/right to switch<br />Swipe up to close · Tap to open
+              </div>
+              <div class="flex gap-2 mt-1">
+                <div
+                  class="size-1.5 rounded-full bg-zinc-900/30"
+                  wf-map="a of state.desktop.recentsOpenApps"
+                  wf-class="{{a.id === state.desktop.recentsCurrentId ? 'bg-zinc-900' : 'bg-zinc-900/30'}}"
+                ></div>
+              </div>
+            </div>
+          </div>
+          <div class="h-14 shrink-0"></div>
+        </div>
+        <div class="contents" data-app-layer=""></div>
+        <div
+          class="md:hidden absolute top-8 inset-x-2 z-[75] pointer-events-none flex flex-col"
+          wf-if="state.desktop.phoneMode &amp;&amp; state.desktop.shadePhase === 'closed' &amp;&amp; state.desktop.notifications.length"
+          data-heads-up=""
+        >
+          <div
+            class="pointer-events-auto touch-none select-none w-full flex items-start gap-3 rounded-3xl bg-neutral-900/95 backdrop-blur-xl text-white shadow-2xl shadow-black/40 border border-white/10 p-3 cursor-pointer"
+            wf-map="n of state.desktop.notifications.slice(-1)"
+            wf-onpointerdown="post('desktop.cardPointerDown', event, n.id, 'heads')"
+          >
+            <div
+              class="size-9 rounded-full flex items-center justify-center text-white text-lg shrink-0"
+              wf-class="{{n.accentTw}}"
+            >
+              <i class="nf" wf-class="{{n.icon}}"></i>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5 text-[11px] text-white/60">
+                <span class="truncate">{{n.appTitle}}</span
+                ><span class="shrink-0">· {{n.time}}</span>
+              </div>
+              <div class="text-sm font-bold truncate">{{n.title}}</div>
+              <div class="text-xs text-white/75 line-clamp-2 break-words">
+                {{n.text}}
+              </div>
+            </div>
+            <img
+              class="size-12 rounded-xl object-cover shrink-0"
+              alt=""
+              wf-if="n.image"
+              wf-src="n.image"
+            />
+          </div>
+        </div>
+        <div
+          class="md:hidden absolute inset-0 z-[80]"
+          wf-if="state.desktop.phoneMode &amp;&amp; state.desktop.shadePhase !== 'closed'"
+          data-shade=""
+        >
+          <div
+            class="absolute inset-0 bg-black/50 transition-opacity duration-200"
+            wf-onclick="post('desktop.closeShade')"
+            wf-class="{{state.desktop.shadePhase === 'closing' ? 'opacity-0' : 'opacity-100'}}"
+          ></div>
+          <div
+            class="absolute inset-x-0 top-0 max-h-full flex flex-col rounded-b-[2rem] bg-neutral-950/90 backdrop-blur-2xl text-white shadow-2xl shadow-black/50 border-b border-white/10"
+            data-shade-panel=""
+            wf-class="{{state.desktop.shadePhase === 'drag' ? 'translate-y-[min(0px,calc(var(--shade-pull,0px)_-_100%))]' : state.desktop.shadePhase === 'closing' ? '-translate-y-full transition-transform duration-200 ease-in' : 'translate-y-0 transition-transform duration-200 ease-out'}}"
+          >
+            <div class="px-6 pt-8 pb-4 flex items-end justify-between gap-4">
+              <div class="min-w-0">
+                <div class="text-4xl font-semibold tabular-nums">
+                  {{state.desktop.clock}}
+                </div>
+                <div class="text-sm text-white/60 truncate">
+                  {{new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}}
+                </div>
+              </div>
+              <div
+                class="gfont-[Share_Tech_Mono] text-xl text-emerald-300 shrink-0"
+              >
+                Tehboxen
+              </div>
+            </div>
+            <div
+              class="flex-1 min-h-0 overflow-y-auto px-3 flex flex-col gap-2"
+            >
+              <div
+                class="pointer-events-auto touch-pan-y select-none w-full flex items-start gap-3 rounded-3xl bg-zinc-900/10 border border-white/10 p-3 cursor-pointer active:bg-zinc-900/15"
+                wf-map="n of state.desktop.shade"
+                wf-onpointerdown="post('desktop.cardPointerDown', event, n.id, 'shade')"
+              >
+                <div
+                  class="size-9 rounded-full flex items-center justify-center text-white text-lg shrink-0"
+                  wf-class="{{n.accentTw}}"
+                >
+                  <i class="nf" wf-class="{{n.icon}}"></i>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div
+                    class="flex items-center gap-1.5 text-[11px] text-white/60"
+                  >
+                    <span class="truncate">{{n.appTitle}}</span
+                    ><span class="shrink-0">· {{n.time}}</span>
+                  </div>
+                  <div class="text-sm font-bold truncate">{{n.title}}</div>
+                  <div class="text-xs text-white/75 line-clamp-3 break-words">
+                    {{n.text}}
+                  </div>
+                </div>
+                <img
+                  class="size-12 rounded-xl object-cover shrink-0"
+                  alt=""
+                  wf-if="n.image"
+                  wf-src="n.image"
+                />
+              </div>
+              <div
+                class="py-10 text-center text-sm text-white/50"
+                wf-if="!state.desktop.shade.length"
+              >
+                No notifications
+              </div>
+            </div>
+            <div
+              class="px-4 pt-3 flex justify-end"
+              wf-if="state.desktop.shade.length"
+            >
+              <button
+                class="px-4 py-1.5 rounded-full bg-zinc-900/15 text-xs font-semibold active:bg-zinc-900/25"
+                wf-onclick="post('desktop.clearShade')"
+                value=""
+              >
+                Clear all
+              </button>
+            </div>
+            <div
+              class="touch-none py-3 flex justify-center cursor-grab"
+              wf-onpointerdown="post('desktop.shadeHandlePointerDown', event)"
+            >
+              <div class="w-10 h-1 rounded-full bg-zinc-900/40 min-h-0"></div>
+            </div>
+          </div>
+        </div>
+        <div
+          class="pointer-events-none absolute right-3 bottom-16 z-[9999] flex flex-col items-end gap-2 w-[min(22rem,calc(100%-1.5rem))] max-md:hidden"
+          data-notifications=""
+        >
+          <div
+            class="pointer-events-auto w-full flex items-start gap-3 rounded-2xl bg-zinc-900/90 backdrop-blur-xl text-zinc-200 shadow-2xl shadow-cyan-900/30 border border-white/70 p-3 cursor-pointer hover:bg-zinc-900"
+            wf-onclick='post("desktop.openNotification", n.id)'
+            wf-map="n of state.desktop.notifications"
+          >
+            <div
+              class="size-9 rounded-xl flex items-center justify-center text-white text-lg shrink-0"
+              wf-class="{{n.accentTw}}"
+            >
+              <i class="nf" wf-class="{{n.icon}}"></i>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div
+                class="flex items-center gap-2 text-[10px] uppercase tracking-wide text-zinc-500"
+              >
+                <span class="truncate">{{n.appTitle}}</span
+                ><span class="ml-auto shrink-0">{{n.time}}</span>
+              </div>
+              <div class="text-sm font-bold truncate">{{n.title}}</div>
+              <div class="text-xs text-zinc-400 line-clamp-2 break-words">
+                {{n.text}}
+              </div>
+            </div>
+            <img
+              class="size-14 rounded-xl object-cover shrink-0"
+              alt=""
+              wf-if="n.image"
+              wf-src="n.image"
+              hidden=""
+            /><button
+              class="size-6 -mr-1 -mt-1 rounded-full hover:bg-black/10 flex items-center justify-center text-zinc-500 shrink-0"
+              title="Dismiss"
+              wf-onclick='(event.stopPropagation(), post("desktop.dismissNotification", n.id))'
+              value=""
+            >
+              <i class="nf nf-md-close text-xs"></i>
+            </button>
+          </div>
+        </div>
+        <div
+          class="relative z-50 h-[3.25rem] shrink-0 flex items-center gap-2 px-3 py-2 bg-zinc-900/20 backdrop-blur-xl border-t border-white/30 shadow-[0_-8px_30px_rgba(16,185,129,0.18)] max-md:hidden"
+        >
+          <button
+            class="size-10 rounded-xl bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-emerald-500/40 hover:scale-105 transition-transform"
+            wf-onclick="post('desktop.openApp', 'settings')"
+            title="System menu"
+            value=""
+          >
+            <span
+              class="gfont-[Share_Tech_Mono] text-base leading-none text-black font-bold"
+              >&gt;_</span
+            >
+          </button>
+          <div class="w-px h-7 bg-zinc-900/30 mx-1"></div>
+          <button
+            class="h-10 px-3 rounded-xl flex items-center gap-2 hover:bg-zinc-900/20 border border-transparent"
+            wf-map="a of state.desktop.openWindows"
+            wf-onclick="post('desktop.taskbarClick', a.id)"
+            wf-class="{{state.desktop.activeApp === a.id ? 'bg-zinc-900/30 border-white/40' : 'bg-zinc-900/15'}}"
+            value=""
+          >
+            <i class="nf" wf-class="{{a.icon + ' ' + (a.iconTw || '')}}"></i
+            ><span class="text-xs font-semibold hidden sm:inline"
+              >{{a.shortTitle || a.title}}</span
+            >
+          </button>
+
+          <div class="flex-1"></div>
+          <button
+            class="h-10 px-3 rounded-xl flex items-center gap-2 bg-black/20 hover:bg-red-500/30 text-sm font-semibold gfont-[JetBrains_Mono]"
+            wf-onclick="post('desktop.logout')"
+            title="Log out"
+            value=""
+          >
+            <i class="nf nf-md-account_lock text-emerald-300"></i
+            ><span class="hidden sm:inline">{{state.desktop.user}}</span
+            ><i class="nf nf-md-logout text-xs opacity-70"></i>
+          </button>
+          <div
+            class="px-3 py-1.5 rounded-xl bg-black/20 text-sm font-semibold tabular-nums tracking-wide"
+          >
+            {{state.desktop.clock}}
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

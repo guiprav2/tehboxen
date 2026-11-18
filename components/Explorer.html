@@ -1,0 +1,280 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Explorer.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="Explorer"
+        class="flex flex-col overflow-hidden shadow-2xl shadow-emerald-900/40 border border-white/40 bg-[#0b0f0c] text-zinc-200 w-[640px] h-[460px] shrink-0 rounded-3xl @container/app outline-none"
+        wf-class="{{this.win.frameClass}}"
+        wf-onclick="post('desktop.focusApp', this.winId)"
+        wf-ondetach="this.post('onDetach')"
+        wf-onattach="(post('desktop.registerWindow', this.winId), this.post('onAttach'))"
+        wf-onkeydown="this.post('keydown', event)"
+        tabindex="-1"
+      >
+        <div
+          class="h-10 shrink-0 flex items-center gap-2 px-3 bg-gradient-to-r from-emerald-700 to-cyan-700 text-white cursor-grab active:cursor-grabbing"
+          wf-onpointerdown="post('desktop.startDrag', this.winId, event)"
+        >
+          <div
+            class="size-6 rounded-md bg-zinc-900/20 flex items-center justify-center text-sm"
+          >
+            <i class="nf nf-md-folder"></i>
+          </div>
+          <div class="flex-1 text-sm font-semibold truncate">
+            Explorer — /{{this.s.cwd}}
+          </div>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+            title="Minimize"
+          >
+            <i class="nf text-xs nf-cod-chrome_minimize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+            title="Maximize"
+          >
+            <i class="nf text-xs nf-cod-chrome_maximize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.closeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+            title="Close"
+          >
+            <i class="nf nf-md-close text-xs"></i>
+          </button>
+        </div>
+        <div
+          class="flex items-center gap-2 px-3 py-2 border-b border-emerald-900 bg-zinc-900/70 flex-wrap gap-y-2"
+        >
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-emerald-900 hover:bg-emerald-800"
+            wf-onclick="this.post('goUp')"
+            value=""
+            title="Up one folder"
+          >
+            <i class="nf nf-md-arrow_up"></i> Up
+          </button>
+          <div
+            class="flex rounded-lg overflow-hidden border border-emerald-800 text-xs"
+          >
+            <button
+              class="px-2 py-1 bg-zinc-900 hover:bg-emerald-950"
+              title="List view"
+              wf-class="{{this.s.view === 'list' ? 'bg-emerald-800 text-emerald-200' : 'text-zinc-500'}}"
+              wf-onclick="this.post('setView', 'list')"
+              value=""
+            >
+              <i class="nf nf-md-view_list"></i>
+            </button>
+            <button
+              class="px-2 py-1 bg-zinc-900 hover:bg-emerald-950"
+              title="Grid view"
+              wf-class="{{this.s.view === 'grid' ? 'bg-emerald-800 text-emerald-200' : 'text-zinc-500'}}"
+              wf-onclick="this.post('setView', 'grid')"
+              value=""
+            >
+              <i class="nf nf-md-view_grid"></i>
+            </button>
+          </div>
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-sky-900 hover:bg-sky-800 text-sky-200"
+            wf-onclick="this.post('uploadFromHost')"
+            value=""
+          >
+            <i class="nf nf-md-upload"></i> Upload
+          </button>
+          <input
+            class="flex-1 min-w-0 rounded-lg border border-emerald-800 px-2 py-1 text-xs bg-zinc-900"
+            placeholder="new name"
+            wf-value="this.s.newName"
+            value=""
+          />
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-cyan-800 hover:bg-cyan-700"
+            wf-onclick="this.post('newFile')"
+            value=""
+          >
+            File
+          </button>
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-cyan-800 hover:bg-cyan-700"
+            wf-onclick="this.post('newFolder')"
+            value=""
+          >
+            Folder
+          </button>
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-red-900 hover:bg-red-800 text-red-300"
+            title="Delete selected (Del)"
+            wf-onclick="this.post('removeSelected')"
+            value=""
+          >
+            Delete
+          </button>
+        </div>
+        <div
+          class="flex-1 min-h-0 overflow-y-auto p-2 bg-zinc-900/50 relative"
+          wf-ondrop="this.post('dropOnList', event)"
+          wf-ondragleave="this.post('dragLeaveList', event)"
+          wf-ondragover="this.post('dragOverList', event)"
+          wf-ondragenter="this.post('dragEnterList', event)"
+          wf-onclick="this.post('clickBackground', event)"
+        >
+          <div
+            class="pointer-events-none absolute inset-2 z-20 rounded-2xl border-2 border-dashed border-emerald-400 bg-emerald-800/60 backdrop-blur-[1px] flex flex-col items-center justify-center gap-1 text-emerald-200"
+            wf-if="this.s.dragOver === 'cwd'"
+          >
+            <i class="nf nf-md-tray_arrow_down text-3xl"></i>
+            <div class="text-sm font-semibold">Drop here</div>
+            <div class="text-[11px] opacity-80">
+              → /{{this.s.cwd}} · hold Ctrl to copy
+            </div>
+          </div>
+          <div class="text-xs text-red-500 px-2 pb-1" wf-if="this.s.error">
+            {{this.s.error}}
+          </div>
+          <div
+            class="text-xs text-zinc-400 px-3 py-6 text-center"
+            wf-if="!this.s.entries.length"
+          >
+            This folder is empty
+          </div>
+          <div class="flex flex-col" wf-if="this.s.view !== 'grid'">
+            <button
+              class="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left hover:bg-emerald-900/80 border border-transparent"
+              data-entry=""
+              draggable="true"
+              wf-map="e of this.s.entries"
+              wf-class="{{this.s.selected[e.path] ? 'bg-emerald-800/70 border-emerald-700' : ''}} {{this.s.dragOver === ('dir:' + e.path) ? 'bg-emerald-900 border-emerald-400 border-dashed' : ''}}"
+              wf-onclick="this.post('clickEntry', e.path, event)"
+              wf-ondblclick="this.post('openEntry', e.path, e.isDir)"
+              wf-ondragstart="this.post('dragStart', e.path, event)"
+              wf-ondragend="this.post('dragEnd')"
+              wf-ondragover="e.isDir ? this.post('dragOverDir', e.path, event) : null"
+              wf-ondrop="e.isDir ? this.post('dropOnDir', e.path, event) : null"
+              value=""
+            >
+              <i
+                class="nf text-lg"
+                wf-class="{{e.isDir ? 'nf-md-folder text-amber-500' : (e.isZip ? 'nf-md-zip_box text-amber-400' : (e.isVideo ? 'nf-md-filmstrip text-sky-500' : (e.isImage ? 'nf-md-image text-green-500' : 'nf-md-file_document text-sky-500')))}}"
+              ></i>
+              <span class="text-sm font-medium truncate">{{e.name}}</span>
+              <span
+                class="ml-auto text-[10px] uppercase tracking-wide text-zinc-400"
+                >{{e.isDir ? 'dir' : (e.name.includes('.') ? e.name.split('.').pop() : 'file')}}</span
+              >
+            </button>
+          </div>
+          <div
+            class="grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-2 content-start"
+            wf-if="this.s.view === 'grid'"
+          >
+            <button
+              class="flex flex-col items-center gap-1 p-1.5 rounded-xl border border-transparent hover:bg-emerald-900/80 text-center min-w-0"
+              data-entry=""
+              draggable="true"
+              wf-map="e of this.s.entries"
+              wf-class="{{this.s.selected[e.path] ? 'bg-emerald-800/70 border-emerald-700' : ''}} {{this.s.dragOver === ('dir:' + e.path) ? 'bg-emerald-900 border-emerald-400 border-dashed' : ''}}"
+              wf-onclick="this.post('clickEntry', e.path, event)"
+              wf-ondblclick="this.post('openEntry', e.path, e.isDir)"
+              wf-ondragstart="this.post('dragStart', e.path, event)"
+              wf-ondragend="this.post('dragEnd')"
+              wf-ondragover="e.isDir ? this.post('dragOverDir', e.path, event) : null"
+              wf-ondrop="e.isDir ? this.post('dropOnDir', e.path, event) : null"
+              value=""
+            >
+              <div
+                class="relative w-full aspect-square rounded-lg overflow-hidden flex items-center justify-center bg-zinc-900/70 border border-emerald-900"
+              >
+                <img
+                  class="absolute inset-0 size-full object-cover pointer-events-none"
+                  alt=""
+                  draggable="false"
+                  wf-if="this.s.thumbs[e.path]"
+                  wf-src="this.s.thumbs[e.path]"
+                />
+                <i
+                  class="nf text-4xl"
+                  wf-if="!this.s.thumbs[e.path]"
+                  wf-class="{{e.isDir ? 'nf-md-folder text-amber-400' : (e.isZip ? 'nf-md-zip_box text-amber-500' : (e.isVideo ? 'nf-md-filmstrip text-sky-400' : (e.isImage ? 'nf-md-image text-green-400' : 'nf-md-file_document text-sky-400')))}}"
+                ></i>
+                <div
+                  class="absolute bottom-1 right-1 size-5 rounded-full bg-black/55 text-white flex items-center justify-center text-[10px]"
+                  wf-if="e.isVideo &amp;&amp; this.s.thumbs[e.path]"
+                >
+                  <i class="nf nf-md-play"></i>
+                </div>
+              </div>
+              <span
+                class="w-full text-[11px] font-medium leading-tight line-clamp-2 break-all"
+                >{{e.name}}</span
+              >
+            </button>
+          </div>
+        </div>
+        <div
+          class="h-6 shrink-0 px-3 flex items-center text-[10px] text-zinc-500 border-t border-emerald-900 bg-zinc-900/60"
+        >
+          <span>{{this.s.entries.length}} item(s)</span>
+          <span
+            class="ml-2 text-emerald-400 font-semibold"
+            wf-if="Object.keys(this.s.selected).length"
+            >· {{Object.keys(this.s.selected).length}} selected</span
+          >
+          <span class="ml-auto opacity-70 max-md:hidden"
+            >Ctrl/Shift-click to select more · drag to move (Ctrl copies)</span
+          >
+        </div>
+        <div
+          class="absolute right-0 bottom-0 size-4 cursor-se-resize max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'se', event)"
+        ></div>
+        <div
+          class="absolute top-10 right-0 bottom-4 w-1.5 cursor-e-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'e', event)"
+        ></div>
+        <div
+          class="absolute left-0 right-4 bottom-0 h-1.5 cursor-s-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 's', event)"
+        ></div>
+      </div>
+    </div>
+  </body>
+</html>

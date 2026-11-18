@@ -1,0 +1,362 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mail.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="Mail"
+        class="flex flex-col overflow-hidden shadow-2xl shadow-cyan-900/40 border border-white/30 bg-zinc-900 text-zinc-200 w-[760px] h-[520px] shrink-0 rounded-3xl @container/app"
+        wf-onattach="post('desktop.registerWindow', this.winId)"
+        wf-onclick="post('desktop.focusApp', this.winId)"
+        wf-class="{{this.win.frameClass}}"
+      >
+        <div
+          class="h-10 shrink-0 flex items-center gap-2 px-3 bg-gradient-to-r from-emerald-500 to-cyan-500 text-white cursor-grab active:cursor-grabbing max-md:hidden"
+          wf-onpointerdown="post('desktop.startDrag', this.winId, event)"
+        >
+          <div
+            class="size-6 rounded-md bg-zinc-900/20 flex items-center justify-center text-sm"
+          >
+            <i class="nf nf-md-email"></i>
+          </div>
+          <div class="flex-1 text-sm font-semibold truncate">
+            BoxMail{{state.mail.me.address ? ' — ' + state.mail.me.address : ''}}
+          </div>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center"
+            wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+            title="Minimize"
+          >
+            <i class="nf text-xs nf-cod-chrome_minimize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center"
+            wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+            title="Maximize"
+          >
+            <i class="nf text-xs nf-cod-chrome_maximize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center"
+            wf-onclick="(event.stopPropagation(), post('desktop.closeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+            title="Close"
+          >
+            <i class="nf nf-md-close text-xs"></i>
+          </button>
+        </div>
+        <div class="flex flex-1 min-h-0 flex-col @min-[720px]:flex-row">
+          <div
+            class="shrink-0 bg-emerald-950 border-emerald-900 p-2 flex gap-1 border-b @min-[720px]:w-40 @min-[720px]:flex-col @min-[720px]:border-b-0 @min-[720px]:border-r @min-[720px]:p-3"
+          >
+            <div
+              class="gfont-[Share_Tech_Mono] text-emerald-500 text-lg px-2 mb-1 @max-[719px]:hidden"
+            >
+              mail
+            </div>
+            <button
+              class="px-3 py-2 rounded-xl text-sm font-semibold bg-gradient-to-r from-emerald-500 to-cyan-500 text-white hover:brightness-110 @min-[720px]:mb-2"
+              wf-onclick="post('mail.compose')"
+              value=""
+            >
+              <i class="nf nf-md-pencil"></i> Write
+            </button>
+            <button
+              class="text-left px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-2"
+              wf-onclick="post('mail.setFolder', 'inbox')"
+              wf-class="{{state.mail.folder === 'inbox' ? 'bg-emerald-500 text-white' : 'hover:bg-emerald-900 text-emerald-300'}}"
+              value=""
+            >
+              <span class="flex-1">Inbox</span>
+              <span
+                class="text-[10px] font-bold"
+                wf-if="state.desktop.unread.mail"
+                >{{state.desktop.unread.mail}}</span
+              >
+            </button>
+            <button
+              class="text-left px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-2"
+              wf-onclick="post('mail.setFolder', 'drafts')"
+              wf-class="{{state.mail.folder === 'drafts' ? 'bg-emerald-500 text-white' : 'hover:bg-emerald-900 text-emerald-300'}}"
+              value=""
+            >
+              <span class="flex-1">Drafts</span>
+              <span
+                class="text-[10px] font-bold opacity-70"
+                wf-if="state.mail.folders.drafts.length"
+                >{{state.mail.folders.drafts.length}}</span
+              >
+            </button>
+            <button
+              class="text-left px-3 py-2 rounded-xl text-sm font-semibold"
+              wf-class="{{state.mail.folder === 'sent' ? 'bg-emerald-500 text-white' : 'hover:bg-emerald-900 text-emerald-300'}}"
+              wf-onclick="post('mail.setFolder', 'sent')"
+              value=""
+            >
+              Sent
+            </button>
+          </div>
+          <div
+            class="w-full @min-[720px]:w-64 shrink-0 border-r border-emerald-900 overflow-y-auto bg-zinc-900 min-h-0"
+            wf-class="{{state.mail.selected || state.mail.composing ? '@max-[719px]:hidden' : 'flex-1 @min-[720px]:flex-none'}}"
+          >
+            <div
+              class="p-4 text-xs text-zinc-400 text-center"
+              wf-if="!state.mail.items.length"
+            >
+              Nothing in {{state.mail.folder}}
+            </div>
+            <button
+              class="w-full text-left px-3 py-3 border-b border-emerald-950 hover:bg-emerald-950"
+              wf-map="m of state.mail.items"
+              wf-class="{{state.mail.selected === m.key ? 'bg-emerald-950' : ''}}"
+              wf-onclick="post('mail.select', m.key)"
+              value=""
+            >
+              <div class="flex justify-between gap-2">
+                <span
+                  class="text-sm truncate"
+                  wf-class="{{m.unread ? 'font-bold text-emerald-300' : 'font-medium'}}"
+                  >{{state.mail.folder === 'inbox' ? m.from : 'To: ' + (m.to || '—')}}</span
+                >
+                <span class="text-[10px] text-zinc-400 shrink-0"
+                  >{{m.time}}</span
+                >
+              </div>
+              <div
+                class="text-xs truncate flex items-center gap-1"
+                wf-class="{{m.unread ? 'font-semibold text-zinc-200' : 'text-zinc-400'}}"
+              >
+                <i
+                  class="nf nf-md-paperclip text-zinc-400"
+                  wf-if="m.files.length"
+                ></i
+                ><span class="truncate">{{m.subject}}</span>
+              </div>
+              <div class="text-[11px] text-zinc-400 truncate">
+                {{m.preview}}
+              </div>
+            </button>
+          </div>
+          <div
+            class="flex-1 min-h-0 min-w-0 flex flex-col bg-gradient-to-br from-white to-emerald-950"
+            wf-class="{{state.mail.selected || state.mail.composing ? '' : '@max-[719px]:hidden'}}"
+          >
+            <div
+              class="flex-1 flex flex-col items-center justify-center text-zinc-400 text-sm gap-2"
+              wf-if="!state.mail.current &amp;&amp; !state.mail.composing"
+            >
+              <i
+                class="nf nf-md-email_heart_outline text-5xl text-emerald-300"
+              ></i>
+              <div>{{state.mail.status || 'Pick a mail 💌'}}</div>
+            </div>
+            <div
+              class="flex-1 min-h-0 overflow-y-auto p-5 @max-[719px]:p-4"
+              wf-if="state.mail.current &amp;&amp; !state.mail.composing"
+            >
+              <div class="flex items-center gap-2 mb-3">
+                <button
+                  class="px-2 py-1 rounded-lg text-xs font-semibold bg-emerald-900 hover:bg-emerald-800 text-emerald-300 @min-[720px]:hidden"
+                  wf-onclick="post('mail.back')"
+                  value=""
+                >
+                  <i class="nf nf-md-arrow_left"></i>
+                </button>
+                <button
+                  class="px-2 py-1 rounded-lg text-xs font-semibold bg-emerald-900 hover:bg-emerald-800 text-emerald-300"
+                  wf-if="state.mail.folder === 'inbox'"
+                  wf-onclick="post('mail.reply')"
+                  value=""
+                >
+                  <i class="nf nf-md-reply"></i> Reply
+                </button>
+                <button
+                  class="px-2 py-1 rounded-lg text-xs font-semibold bg-red-950 hover:bg-red-900 text-red-400"
+                  wf-onclick="post('mail.remove')"
+                  value=""
+                >
+                  <i class="nf nf-md-delete"></i> Delete
+                </button>
+              </div>
+              <div class="text-xl font-bold text-emerald-300 mb-1 break-words">
+                {{state.mail.current.subject}}
+              </div>
+              <div class="text-sm text-zinc-500">
+                From {{state.mail.current.from || '—'}}
+              </div>
+              <div class="text-xs text-zinc-400 mb-4">
+                To {{state.mail.current.to || 'me'}} ·
+                {{state.mail.current.dateFull}}
+              </div>
+              <div
+                class="text-xs text-amber-300 bg-amber-950 rounded-lg px-2 py-1 mb-3"
+                wf-if="state.mail.current.error"
+              >
+                {{state.mail.current.error}}
+              </div>
+              <pre
+                class="whitespace-pre-wrap break-words text-sm leading-relaxed font-[Quicksand] text-zinc-300"
+              >
+{{state.mail.current.body}}</pre
+              >
+              <div
+                class="mt-4 flex flex-wrap gap-2"
+                wf-if="state.mail.current.files.length"
+              >
+                <button
+                  class="flex items-center gap-2 rounded-xl border border-emerald-900 bg-zinc-900 hover:bg-emerald-950 p-1.5 pr-3 text-xs max-w-full"
+                  wf-map="f of state.mail.current.files"
+                  wf-onclick="post('mail.openFile', f.path)"
+                  value=""
+                >
+                  <img
+                    class="size-12 rounded-lg object-cover shrink-0"
+                    alt=""
+                    wf-if="f.isImage &amp;&amp; f.url"
+                    wf-src="f.url"
+                  />
+                  <i
+                    class="nf nf-md-file text-2xl text-emerald-400 px-2"
+                    wf-if="!(f.isImage &amp;&amp; f.url)"
+                  ></i>
+                  <span class="truncate">{{f.name}}</span>
+                </button>
+              </div>
+            </div>
+            <div
+              class="flex-1 min-h-0 flex flex-col p-4 gap-2"
+              wf-if="state.mail.composing"
+            >
+              <div class="flex items-center gap-2">
+                <button
+                  class="px-2 py-1 rounded-lg text-xs font-semibold bg-emerald-900 hover:bg-emerald-800 text-emerald-300 @min-[720px]:hidden"
+                  wf-onclick="post('mail.back')"
+                  value=""
+                >
+                  <i class="nf nf-md-arrow_left"></i>
+                </button>
+                <div class="font-bold text-emerald-300 flex-1">
+                  {{state.mail.composing.id ? 'Draft' : 'New mail'}}
+                </div>
+                <span class="text-[11px] text-emerald-400"
+                  >{{state.mail.status}}</span
+                >
+              </div>
+              <input
+                class="rounded-lg border border-emerald-800 px-3 py-1.5 text-sm bg-zinc-900 outline-none focus:border-emerald-400"
+                placeholder="To"
+                wf-value="state.mail.composing.to"
+                value=""
+              />
+              <input
+                class="rounded-lg border border-emerald-800 px-3 py-1.5 text-sm bg-zinc-900 outline-none focus:border-emerald-400"
+                placeholder="Subject"
+                wf-value="state.mail.composing.subject"
+                value=""
+              />
+              <textarea
+                class="flex-1 min-h-24 resize-none rounded-lg border border-emerald-800 px-3 py-2 text-sm bg-zinc-900 outline-none focus:border-emerald-400"
+                placeholder="Write something sweet…"
+                wf-value="state.mail.composing.body"
+                value=""
+              ></textarea>
+              <div
+                class="flex flex-wrap gap-1"
+                wf-if="state.mail.composing.attachments.length"
+              >
+                <span
+                  class="flex items-center gap-1 rounded-full bg-emerald-900 text-emerald-300 text-[11px] pl-2 pr-1 py-0.5"
+                  wf-map="a of state.mail.composing.attachments"
+                  >{{a.split('/').pop()}}<button
+                    class="size-4 rounded-full hover:bg-emerald-800 flex items-center justify-center"
+                    wf-onclick="post('mail.removeAttachment', a)"
+                    value=""
+                  >
+                    <i class="nf nf-md-close text-[10px]"></i></button
+                ></span>
+              </div>
+              <div class="text-xs text-red-500" wf-if="state.mail.error">
+                {{state.mail.error}}
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  class="px-3 py-1.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-emerald-500 to-cyan-500 text-white hover:brightness-110"
+                  wf-onclick="post('mail.send')"
+                  value=""
+                >
+                  <i class="nf nf-md-send"></i> Send
+                </button>
+                <button
+                  class="px-3 py-1.5 rounded-xl text-sm font-semibold bg-emerald-900 hover:bg-emerald-800 text-emerald-300"
+                  wf-onclick="post('mail.attach')"
+                  value=""
+                >
+                  <i class="nf nf-md-paperclip"></i> Attach
+                </button>
+                <button
+                  class="px-3 py-1.5 rounded-xl text-sm font-semibold bg-emerald-900 hover:bg-emerald-800 text-emerald-300"
+                  wf-onclick="post('mail.saveDraft')"
+                  value=""
+                >
+                  Save draft
+                </button>
+                <button
+                  class="ml-auto px-3 py-1.5 rounded-xl text-sm font-semibold text-zinc-500 hover:bg-zinc-900"
+                  wf-onclick="post('mail.discard')"
+                  value=""
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div
+          class="absolute right-0 bottom-0 size-4 cursor-se-resize max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'se', event)"
+        ></div>
+        <div
+          class="absolute top-10 right-0 bottom-4 w-1.5 cursor-e-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'e', event)"
+        ></div>
+        <div
+          class="absolute left-0 right-4 bottom-0 h-1.5 cursor-s-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 's', event)"
+        ></div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,244 @@
+#!/usr/bin/env node
+/**
+ * scp-like host ↔ Tehboxen VFS transfer through dbgserver.
+ *
+ *   tehboxen-scp put [-r] [-u user] <local> <vfs-path>
+ *   tehboxen-scp get [-r] [-u user] <vfs-path> <local>
+ *
+ * Also accepts scp-ish aliases:
+ *   tehboxen-scp [-r] [-u user] <local> <user:vfs-path>   # put
+ *   tehboxen-scp [-r] [-u user] <user:vfs-path> <local>   # get
+ *
+ * Requires dbgserver on 127.0.0.1 (see .tehboxen-dbg/meta.json) with a
+ * connected preview client.
+ */
+import fs from 'node:fs/promises';
+import fssync from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+let __dirname = path.dirname(fileURLToPath(import.meta.url));
+let PROJECT_ROOT = path.resolve(__dirname, '..');
+let META = path.join(PROJECT_ROOT, '.tehboxen-dbg', 'meta.json');
+
+function usage(code = 0) {
+  console.log(`tehboxen-scp — copy files between host and Tehboxen VFS
+
+  tehboxen-scp put [-r] [-u user] <local> <vfs-path>
+  tehboxen-scp get [-r] [-u user] <vfs-path> <local>
+
+Examples:
+  tehboxen-scp put ./hi.txt home/<player>/hi.txt
+  tehboxen-scp put -r ./folder home/<player>/folder
+  tehboxen-scp get home/<player>/hi.txt ./hi.txt
+  tehboxen-scp get -r -u root places/park ./park-backup
+`);
+  process.exit(code);
+}
+
+async function readMeta() {
+  let raw = await fs.readFile(META, 'utf8');
+  return JSON.parse(raw);
+}
+
+function baseUrl(meta) {
+  return `http://${meta.host || '127.0.0.1'}:${meta.port || 8766}`;
+}
+
+async function walkFiles(root) {
+  let out = [];
+  async function walk(dir, relBase) {
+    let entries = await fs.readdir(dir, { withFileTypes: true });
+    for (let ent of entries) {
+      let rel = relBase ? relBase + '/' + ent.name : ent.name;
+      let full = path.join(dir, ent.name);
+      if (ent.isDirectory()) await walk(full, rel);
+      else if (ent.isFile()) out.push({ full, rel });
+    }
+  }
+  let st = await fs.stat(root);
+  if (st.isFile()) {
+    out.push({ full: root, rel: path.basename(root) });
+  } else if (st.isDirectory()) {
+    await walk(root, '');
+  } else {
+    throw new Error('not a file or directory: ' + root);
+  }
+  return out;
+}
+
+async function put({ local, remote, user, recursive }) {
+  let meta = await readMeta();
+  let url = baseUrl(meta) + '/vfs/upload';
+  let st = await fs.stat(local);
+  if (st.isDirectory() && !recursive) {
+    throw new Error('local path is a directory; pass -r');
+  }
+  let files = await walkFiles(local);
+  if (!files.length) throw new Error('no files to upload');
+
+  let form = new FormData();
+  form.append('path', remote.replace(/^\/+/, ''));
+  form.append('user', user);
+  if (recursive || st.isDirectory()) form.append('recursive', '1');
+
+  for (let f of files) {
+    let buf = await fs.readFile(f.full);
+    // Directory layout under remote/; single file uses basename.
+    // Send rel explicitly — multipart filename often strips directories.
+    let rel = st.isDirectory() ? f.rel : path.basename(local);
+    form.append('rels', rel);
+    form.append('files', new Blob([buf]), rel.replace(/\//g, '__'));
+  }
+
+  // Dest: if uploading a dir, remote is the directory root
+  let dest = remote.replace(/^\/+/, '').replace(/\/+$/, '');
+  form.set('path', dest);
+
+  let res = await fetch(url, { method: 'POST', body: form });
+  let body = await res.json().catch(() => ({}));
+  if (!res.ok || body.ok === false) {
+    throw new Error(body.error || `upload failed (${res.status})`);
+  }
+  let n = body.result?.count ?? files.length;
+  console.log(`OK put ${n} file(s) → ${dest} (user=${user})`);
+  return body;
+}
+
+async function get({ remote, local, user, recursive }) {
+  let meta = await readMeta();
+  let q = new URLSearchParams({
+    path: remote.replace(/^\/+/, ''),
+    user,
+    recursive: recursive ? '1' : '0',
+  });
+  let res = await fetch(baseUrl(meta) + '/vfs/download?' + q);
+  let ctype = res.headers.get('content-type') || '';
+
+  if (!res.ok) {
+    let err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `download failed (${res.status})`);
+  }
+
+  // Single file: raw bytes
+  if (!ctype.includes('application/json')) {
+    let buf = Buffer.from(await res.arrayBuffer());
+    let outPath = local;
+    let lst = null;
+    try {
+      lst = await fs.stat(local);
+    } catch {}
+    if (lst?.isDirectory()) {
+      outPath = path.join(local, path.basename(remote));
+    }
+    await ensureDir(path.dirname(outPath));
+    await fs.writeFile(outPath, buf);
+    console.log(`OK get ${buf.length} bytes → ${outPath}`);
+    return { path: outPath, bytes: buf.length };
+  }
+
+  let body = await res.json();
+  if (!body.ok) throw new Error(body.error || 'download failed');
+  let files = body.files || [];
+  if (!files.length) throw new Error('no files in download');
+
+  let destRoot = local;
+  await ensureDir(destRoot);
+  // If local exists as file and multiple remote files, error
+  let localStat = await fs.stat(local).catch(() => null);
+  if (localStat?.isFile() && files.length > 1) {
+    throw new Error('local path is a file but remote is a directory');
+  }
+  if (localStat?.isFile()) {
+    // single file overwrite already handled above; recursive shouldn't hit
+  }
+
+  for (let f of files) {
+    let rel = f.rel || path.basename(remote);
+    let outPath = path.join(destRoot, rel);
+    await ensureDir(path.dirname(outPath));
+    let fr = await fetch(f.url);
+    if (!fr.ok) throw new Error(`fetch ${f.url} failed (${fr.status})`);
+    let buf = Buffer.from(await fr.arrayBuffer());
+    await fs.writeFile(outPath, buf);
+  }
+  console.log(`OK get ${files.length} file(s) → ${destRoot}`);
+  return body;
+}
+
+async function ensureDir(p) {
+  if (!p || p === '.') return;
+  await fs.mkdir(p, { recursive: true });
+}
+
+function parseArgs(argv) {
+  let out = {
+    cmd: null,
+    recursive: false,
+    user: process.env.TEHBOXEN_USER || 'root',
+    src: null,
+    dest: null,
+  };
+  let rest = [];
+  for (let i = 0; i < argv.length; i++) {
+    let a = argv[i];
+    if (a === '-h' || a === '--help') usage(0);
+    else if (a === '-r' || a === '--recursive') out.recursive = true;
+    else if (a === '-u' || a === '--user') out.user = argv[++i] || out.user;
+    else if (a === 'put' || a === 'get') out.cmd = a;
+    else rest.push(a);
+  }
+  if (rest.length < 2) usage(2);
+  out.src = rest[0];
+  out.dest = rest[1];
+
+  // scp-ish user:path detection when cmd omitted
+  if (!out.cmd) {
+    let srcRemote = out.src.includes(':') && !out.src.startsWith('/') && !fssync.existsSync(out.src);
+    let destRemote = out.dest.includes(':');
+    if (!srcRemote && (destRemote || !fssync.existsSync(out.dest))) {
+      out.cmd = 'put';
+      if (destRemote) {
+        let [u, ...p] = out.dest.split(':');
+        if (p.length) {
+          out.user = u || out.user;
+          out.dest = p.join(':');
+        }
+      }
+    } else if (srcRemote) {
+      out.cmd = 'get';
+      let [u, ...p] = out.src.split(':');
+      if (p.length) {
+        out.user = u || out.user;
+        out.src = p.join(':');
+      }
+    } else {
+      usage(2);
+    }
+  }
+  return out;
+}
+
+async function main() {
+  let args = parseArgs(process.argv.slice(2));
+  if (args.cmd === 'put') {
+    await put({
+      local: path.resolve(args.src),
+      remote: args.dest,
+      user: args.user,
+      recursive: args.recursive,
+    });
+  } else if (args.cmd === 'get') {
+    await get({
+      remote: args.src,
+      local: path.resolve(args.dest),
+      user: args.user,
+      recursive: args.recursive,
+    });
+  } else usage(2);
+}
+
+main().catch((err) => {
+  console.error('tehboxen-scp:', err.message || err);
+  process.exit(1);
+});

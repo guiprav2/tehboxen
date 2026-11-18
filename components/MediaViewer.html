@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>MediaViewer.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="MediaViewer"
+        class="flex flex-col overflow-hidden shadow-2xl shadow-green-900/30 border border-white/40 bg-[#111] text-white w-[640px] h-[480px] shrink-0 rounded-3xl"
+        wf-onattach="post('desktop.registerWindow', 'mediaViewer')"
+        wf-class="{{state.desktop.apps.mediaViewer.frameClass}}"
+        wf-onclick="post('desktop.focusApp', 'mediaViewer')"
+        wf-ondetach="(post('desktop.unregisterWindow', 'mediaViewer'), post('mediaViewer.onDetach'))"
+        =""
+        =""
+      >
+        <div
+          class="h-10 shrink-0 flex items-center gap-2 px-3 bg-[#1b3a2a] cursor-grab active:cursor-grabbing border-b border-white/10"
+          wf-onpointerdown="post('desktop.startDrag', 'mediaViewer', event)"
+        >
+          <div
+            class="size-6 rounded-md bg-[#a6e3a1]/25 flex items-center justify-center text-sm text-[#a6e3a1]"
+          >
+            <i class="nf nf-md-image"></i>
+          </div>
+          <div class="flex-1 text-sm font-semibold truncate">
+            {{state.mediaViewer.path || 'Media Viewer'}}
+          </div>
+          <button
+            class="px-2 h-7 rounded-lg text-xs font-semibold bg-zinc-900/10 hover:bg-zinc-900/20"
+            wf-onclick="(event.stopPropagation(), post('mediaViewer.openInEditor'))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            Open in Editor
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/10 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', 'mediaViewer'))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf text-xs nf-cod-chrome_minimize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/10 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', 'mediaViewer'))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf text-xs nf-cod-chrome_maximize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.closeApp', 'mediaViewer'))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf nf-md-close text-xs"></i>
+          </button>
+        </div>
+        <div
+          class="flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black/80 p-3"
+        >
+          <img
+            class="max-w-full max-h-full object-contain"
+            alt=""
+            wf-src="state.mediaViewer.url"
+            wf-if="state.mediaViewer.isImage &amp;&amp; state.mediaViewer.url"
+          /><video
+            class="max-w-full max-h-full"
+            controls=""
+            autoplay=""
+            wf-if="state.mediaViewer.isVideo &amp;&amp; state.mediaViewer.url"
+            wf-src="state.mediaViewer.url"
+          ></video>
+          <div
+            class="text-sm text-white/70 px-4 text-center"
+            wf-if="!state.mediaViewer.url"
+          >
+            {{state.mediaViewer.error || "Open an image or video from Explorer"}}
+          </div>
+        </div>
+        <div
+          class="absolute right-0 bottom-0 size-4 cursor-se-resize max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', 'mediaViewer', 'se', event)"
+        ></div>
+        <div
+          class="absolute top-10 right-0 bottom-4 w-1.5 cursor-e-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', 'mediaViewer', 'e', event)"
+        ></div>
+        <div
+          class="absolute left-0 right-4 bottom-0 h-1.5 cursor-s-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', 'mediaViewer', 's', event)"
+        ></div>
+      </div>
+    </div>
+  </body>
+</html>

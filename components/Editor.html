@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Editor.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="Editor"
+        class="flex flex-col overflow-hidden shadow-2xl shadow-sky-900/30 border border-white/40 bg-[#1e1e2e] text-[#cdd6f4] w-[720px] h-[500px] shrink-0 rounded-3xl"
+        wf-class="{{this.win.frameClass}}"
+        wf-onclick="post('desktop.focusApp', this.winId)"
+        wf-ondetach="(post('desktop.unregisterWindow', this.winId), this.post('onDetach'))"
+        wf-onattach="post('desktop.registerWindow', this.winId)"
+      >
+        <div
+          class="h-10 shrink-0 flex items-center gap-2 px-3 bg-[#313244] cursor-grab active:cursor-grabbing border-b border-white/10"
+          wf-onpointerdown="post('desktop.startDrag', this.winId, event)"
+        >
+          <div
+            class="size-6 rounded-md bg-[#89b4fa]/25 flex items-center justify-center text-sm text-[#89b4fa]"
+          >
+            <i class="nf nf-md-file_document_edit"></i>
+          </div>
+          <div class="flex-1 text-sm font-semibold truncate">
+            {{this.s.path || 'Editor'}}{{this.s.dirty ? ' •' : ''}}
+          </div>
+          <button
+            class="px-2 h-7 rounded-lg text-xs font-semibold bg-zinc-900/10 hover:bg-zinc-900/20"
+            wf-onclick="(event.stopPropagation(), this.post('openFromSystem'))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            Open</button
+          ><button
+            class="px-2 h-7 rounded-lg text-xs font-semibold bg-[#89b4fa]/30 hover:bg-[#89b4fa]/50"
+            wf-onclick="(event.stopPropagation(), this.post('save'))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            Save
+          </button>
+          <span class="text-[10px] text-[#a6e3a1] px-1">{{this.s.status}}</span>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/10 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf text-xs nf-cod-chrome_minimize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/10 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf text-xs nf-cod-chrome_maximize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.closeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+          >
+            <i class="nf nf-md-close text-xs"></i>
+          </button>
+        </div>
+
+        <div
+          class="relative flex-1 min-h-0 overflow-hidden h-full w-full"
+          wf-onattach="this.post('onAttach', _1)"
+          wf-ondetach="this.post('onDetach')"
+        ></div>
+        <div
+          class="absolute right-0 bottom-0 size-4 cursor-se-resize max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'se', event)"
+        ></div>
+        <div
+          class="absolute top-10 right-0 bottom-4 w-1.5 cursor-e-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'e', event)"
+        ></div>
+        <div
+          class="absolute left-0 right-4 bottom-0 h-1.5 cursor-s-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 's', event)"
+        ></div>
+      </div>
+    </div>
+  </body>
+</html>

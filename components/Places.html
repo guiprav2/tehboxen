@@ -1,0 +1,122 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Places.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      id="Places"
+      class="flex flex-col overflow-hidden shadow-2xl shadow-cyan-900/40 border border-white/30 bg-[#14081c] text-white shrink-0 rounded-3xl @container/app"
+      wf-onattach="await post('places.onAttach', _1, this.winId)"
+      wf-ondetach="post('places.onDetach')"
+      wf-onclick="post('desktop.focusApp', this.winId)"
+      wf-class="{{this.win.frameClass}}"
+    >
+      <div
+        class="h-10 shrink-0 flex items-center gap-2 px-3 bg-gradient-to-r from-cyan-500/95 via-emerald-500/90 to-sky-500/95 text-white cursor-grab active:cursor-grabbing backdrop-blur-sm"
+        wf-onpointerdown="post('desktop.startDrag', this.winId, event)"
+      >
+        <div
+          class="size-6 rounded-md bg-zinc-900/20 flex items-center justify-center text-sm"
+        >
+          <i class="nf nf-md-map"></i>
+        </div>
+        <div class="flex-1 text-sm font-semibold truncate">Places</div>
+        <button
+          class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+          wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', this.winId))"
+          wf-onpointerdown="event.stopPropagation()"
+          value=""
+        >
+          <i class="nf text-xs nf-cod-chrome_minimize"></i>
+        </button>
+        <button
+          class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+          wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', this.winId))"
+          wf-onpointerdown="event.stopPropagation()"
+          value=""
+        >
+          <i class="nf text-xs nf-cod-chrome_maximize"></i>
+        </button>
+        <button
+          class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center max-md:hidden"
+          wf-onclick="(event.stopPropagation(), post('desktop.closeApp', this.winId))"
+          wf-onpointerdown="event.stopPropagation()"
+          value=""
+        >
+          <i class="nf nf-md-close text-xs"></i>
+        </button>
+      </div>
+      <div
+        class="px-3 py-2.5 flex items-center gap-2 border-b border-white/10 bg-zinc-900/5 backdrop-blur-xl shrink-0"
+      >
+        <div
+          class="text-xs text-white/60 flex-1 truncate flex items-center gap-2 min-w-0"
+        >
+          <span
+            class="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-700/20 px-2.5 py-1 max-w-full"
+            ><i
+              class="nf nf-md-map_marker text-emerald-300 text-[10px] shrink-0"
+            ></i
+            ><span class="truncate"
+              ><span class="text-white/50">You · </span
+              ><span class="text-emerald-200 font-semibold"
+                >{{state.places.hereName || state.places.here || "…"}}</span
+              ></span
+            ></span
+          ><span class="text-white/35 truncate" wf-if="state.places.status"
+            >{{state.places.status}}</span
+          >
+        </div>
+
+        <button
+          class="h-8 px-4 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-xs font-semibold shadow-lg shadow-emerald-500/40 disabled:opacity-40 disabled:shadow-none"
+          wf-onclick="post('places.go')"
+          value=""
+          wf-disabled="!state.places.selected || state.places.selected === state.places.here || state.places.moving"
+        >
+          Go
+        </button>
+      </div>
+      <div class="flex-1 min-h-0 relative overflow-hidden">
+        <canvas
+          class="absolute inset-0 w-full h-full cursor-pointer"
+          data-places-canvas=""
+          wf-onpointerdown="post('places.pointerDown', event)"
+          wf-onpointermove="post('places.pointerMove', event)"
+          wf-onpointerup="post('places.pointerUp', event)"
+          wf-ondblclick="post('places.dblClick', event)"
+        ></canvas>
+        <div
+          class="absolute bottom-3 left-3 right-3 z-10 px-3 py-2 text-[11px] text-teal-100 bg-teal-950/80 border border-teal-400/30 rounded-2xl backdrop-blur-md shadow-lg shrink-0 pointer-events-none"
+          wf-if="state.places.error"
+        >
+          {{state.places.error}}
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

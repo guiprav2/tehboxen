@@ -1,0 +1,129 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>FilePicker.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="FilePicker"
+        class="w-[min(92vw,420px)] max-h-[min(80vh,520px)] flex flex-col overflow-hidden rounded-2xl border border-white/40 bg-[#0b0f0c] text-zinc-200 shadow-2xl shadow-emerald-900/30"
+        wf-onattach="this.boot(_1)"
+      >
+        <div
+          class="shrink-0 flex items-center gap-2 px-3 h-11 bg-gradient-to-r from-emerald-400 to-cyan-400 text-white"
+        >
+          <i class="nf nf-md-folder_open text-lg"></i>
+          <div class="flex-1 text-sm font-semibold truncate">
+            {{this.title}}
+          </div>
+          <button
+            type="button"
+            class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center"
+            wf-onclick="this.cancel(event)"
+            title="Close"
+            value=""
+          >
+            <i class="nf nf-md-close text-xs"></i>
+          </button>
+        </div>
+        <div
+          class="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-emerald-900 bg-zinc-900/70"
+        >
+          <button
+            type="button"
+            class="size-8 rounded-lg hover:bg-emerald-900 flex items-center justify-center text-emerald-500"
+            wf-onclick="this.goUp()"
+            title="Up"
+            value=""
+          >
+            <i class="nf nf-md-arrow_up"></i>
+          </button>
+          <div class="flex-1 text-xs font-mono truncate text-zinc-400">
+            {{this.cwdLabel}}
+          </div>
+        </div>
+        <div
+          class="flex-1 min-h-0 overflow-y-auto p-2 space-y-0.5"
+          style="min-height: 220px"
+        >
+          <div
+            class="text-xs text-zinc-400 px-2 py-6 text-center"
+            wf-if="!this.entries.length"
+          >
+            No matching items here
+          </div>
+          <button
+            type="button"
+            class="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-left hover:bg-emerald-900/80 border border-transparent"
+            wf-map="e of this.entries"
+            wf-onclick="this.select(e)"
+            wf-ondblclick="this.activate(e, event)"
+            wf-class="{{this.selected === e.path ? 'bg-emerald-800/80 border-emerald-700' : ''}}"
+            value=""
+          >
+            <i
+              class="nf text-base shrink-0"
+              wf-class="{{e.isDir ? 'nf-md-folder text-amber-400' : (e.isMedia ? 'nf-md-image text-emerald-500' : 'nf-md-file_document text-sky-500')}}"
+            ></i
+            ><span class="flex-1 text-sm truncate">{{e.name}}</span
+            ><span
+              class="text-[10px] uppercase tracking-wider text-zinc-400"
+              wf-if="e.isDir"
+              >dir</span
+            >
+          </button>
+        </div>
+        <div class="text-xs text-red-500 px-3" wf-if="this.error">
+          {{this.error}}
+        </div>
+        <div
+          class="shrink-0 flex items-center justify-end gap-2 px-3 py-2.5 border-t border-emerald-900 bg-zinc-900/80"
+        >
+          <button
+            type="button"
+            class="px-3 h-8 rounded-xl text-sm font-semibold text-zinc-400 hover:bg-zinc-900"
+            wf-onclick="this.cancel(event)"
+            value=""
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="px-3 h-8 rounded-xl text-sm font-semibold text-white bg-cyan-500 hover:bg-cyan-600 disabled:opacity-40"
+            wf-onclick="this.confirm(event)"
+            wf-disabled="!this.canConfirm()"
+            value=""
+          >
+            Open
+          </button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

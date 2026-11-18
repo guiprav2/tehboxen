@@ -1,0 +1,374 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Relay.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="Relay"
+        class="flex flex-col overflow-hidden shadow-2xl shadow-emerald-900/40 border border-white/30 bg-[#0b141a] text-white w-[720px] h-[520px] shrink-0 rounded-3xl @container/app"
+        wf-onattach="post('desktop.registerWindow', this.winId)"
+        wf-onclick="post('desktop.focusApp', this.winId)"
+        wf-class="{{this.win.frameClass}}"
+      >
+        <div
+          class="h-10 shrink-0 flex items-center gap-2 px-3 bg-[#1f2c34] cursor-grab active:cursor-grabbing max-md:hidden"
+          wf-onpointerdown="post('desktop.startDrag', this.winId, event)"
+        >
+          <div
+            class="size-6 rounded-md bg-[#25D366] flex items-center justify-center text-sm"
+          >
+            <i class="nf nf-md-message_lock"></i>
+          </div>
+          <div class="flex-1 text-sm font-semibold truncate">Relay</div>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/10 flex items-center justify-center"
+            wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+            title="Minimize"
+          >
+            <i class="nf text-xs nf-cod-chrome_minimize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/10 flex items-center justify-center"
+            wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+            title="Maximize"
+          >
+            <i class="nf text-xs nf-cod-chrome_maximize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center"
+            wf-onclick="(event.stopPropagation(), post('desktop.closeApp', this.winId))"
+            value=""
+            wf-onpointerdown="event.stopPropagation()"
+            title="Close"
+          >
+            <i class="nf nf-md-close text-xs"></i>
+          </button>
+        </div>
+        <div class="flex flex-1 min-h-0">
+          <div
+            class="w-full @min-[560px]:w-64 shrink-0 border-r border-white/10 bg-[#111b21] flex flex-col"
+            wf-class="{{state.relay.active ? '@max-[559px]:hidden' : ''}}"
+          >
+            <div
+              class="p-3 border-b border-white/10 flex items-center gap-2 justify-between"
+            >
+              <div
+                class="size-8 rounded-full bg-[#25D366] flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden text-ellipsis"
+              >
+                {{String(state.relay.me.name || 'Me').slice(0, 1)}}
+              </div>
+              <div class="min-w-0">
+                <div class="text-sm font-bold">Chats</div>
+                <div class="text-[10px] text-white/50 truncate">
+                  {{state.relay.me.about || state.relay.me.phone || ''}}
+                </div>
+              </div>
+              <button
+                class="size-8 rounded-full hover:bg-zinc-900/10 flex items-center justify-center text-[#25D366] shrink-0"
+                title="New group"
+                wf-onclick="post('relay.openNewGroup')"
+                value=""
+              >
+                <i class="nf nf-md-account_multiple_plus"></i>
+              </button>
+            </div>
+            <div
+              class="border-b border-white/10 p-3 space-y-2 bg-[#0b141a]"
+              wf-if="state.relay.composingGroup"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <div class="text-sm font-semibold">New group</div>
+                <button
+                  class="text-xs text-white/50 hover:text-white"
+                  wf-onclick="post('relay.cancelNewGroup')"
+                  value=""
+                >
+                  Cancel
+                </button>
+              </div>
+              <input
+                class="w-full rounded-lg bg-[#2a3942] px-3 py-2 text-sm outline-none placeholder:text-white/40"
+                placeholder="Group name"
+                wf-value="state.relay.groupTitle"
+                value=""
+              />
+              <div class="text-[10px] text-white/40">
+                Pick at least two people
+              </div>
+              <div class="max-h-40 overflow-y-auto space-y-1">
+                <button
+                  class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-sm hover:bg-zinc-900/5"
+                  wf-map="p of state.relay.groupCandidates"
+                  wf-onclick="post('relay.toggleGroupPick', p.id)"
+                  wf-class="{{p.picked ? 'bg-zinc-900/10' : ''}}"
+                  value=""
+                >
+                  <span
+                    class="size-5 rounded-full border border-white/30 flex items-center justify-center text-[10px] overflow-hidden text-ellipsis"
+                    wf-class="{{p.picked ? 'bg-[#25D366] border-[#25D366] text-[#0b141a]' : ''}}"
+                    >{{p.picked ? '✓' : ''}}</span
+                  >
+                  <span class="truncate">{{p.name}}</span>
+                </button>
+              </div>
+              <div
+                class="text-[11px] text-teal-300"
+                wf-if="state.relay.groupError"
+              >
+                {{state.relay.groupError}}
+              </div>
+              <button
+                class="w-full rounded-lg bg-[#25D366] text-[#0b141a] text-sm font-semibold py-2 hover:brightness-110"
+                wf-onclick="post('relay.createGroup')"
+                value=""
+              >
+                Create
+              </button>
+            </div>
+            <div class="flex-1 overflow-y-auto">
+              <div
+                class="p-4 text-xs text-white/40 text-center"
+                wf-if="!state.relay.contacts.length"
+              >
+                No chats yet. Add a folder named after a phone number under
+                ~/.relay/
+              </div>
+              <button
+                class="w-full flex items-center gap-3 px-3 py-3 text-left hover:bg-zinc-900/5 border-b border-white/5"
+                wf-map="c of state.relay.contacts"
+                wf-class="{{state.relay.active === c.id ? 'bg-zinc-900/10' : ''}}"
+                wf-onclick="post('relay.select', c.id)"
+                value=""
+              >
+                <div
+                  class="relative size-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 text-white overflow-hidden text-ellipsis"
+                  wf-class="{{c.tw}}"
+                >
+                  <span>{{c.initial}}</span>
+                  <img
+                    class="absolute inset-0 size-full object-cover"
+                    alt=""
+                    wf-if="c.avatar"
+                    wf-src="c.avatar"
+                  />
+                  <span
+                    class="absolute size-2.5 rounded-full border-2 bg-zinc-900/30 min-h-0 bottom-1 right-1 border-[#111b21]"
+                    wf-if="!c.isGroup"
+                    wf-class="{{replaces border-[#111b21]: c.presence === 'online' ? 'bg-[#25D366]' : 'bg-zinc-900/30'}}"
+                  ></span>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="flex justify-between gap-2">
+                    <span class="text-sm font-semibold truncate"
+                      >{{c.name}}</span
+                    >
+                    <span
+                      class="text-[10px] shrink-0"
+                      wf-class="{{c.unread ? 'text-[#25D366]' : 'text-white/40'}}"
+                      >{{c.time}}</span
+                    >
+                  </div>
+                  <div class="text-xs text-white/50 truncate">
+                    {{c.preview}}
+                  </div>
+                </div>
+                <div
+                  class="min-w-5 h-5 px-1 rounded-full bg-[#25D366] text-[10px] font-bold flex items-center justify-center shrink-0 text-[#0b141a]"
+                  wf-if="c.unread"
+                >
+                  {{c.unread}}
+                </div>
+              </button>
+            </div>
+          </div>
+          <div
+            class="flex-1 flex flex-col min-w-0 bg-[#0b141a]"
+            wf-class="{{state.relay.active ? '' : '@max-[559px]:hidden'}}"
+          >
+            <div
+              class="flex-1 flex flex-col items-center justify-center gap-2 text-white/40 text-sm"
+              wf-if="!state.relay.activeContact"
+            >
+              <i class="nf nf-md-message_lock text-5xl text-[#25D366]/50"></i>
+              <div>Pick a chat</div>
+            </div>
+            <div
+              class="h-12 shrink-0 px-3 flex items-center gap-3 border-b border-white/10 bg-[#1f2c34]"
+              wf-if="state.relay.activeContact"
+            >
+              <button
+                class="size-8 rounded-full hover:bg-zinc-900/10 flex items-center justify-center @min-[560px]:hidden"
+                title="Back"
+                wf-onclick="post('relay.select', null)"
+                value=""
+              >
+                <i class="nf nf-md-arrow_left"></i>
+              </button>
+              <div
+                class="relative size-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden"
+                wf-class="{{state.relay.activeContact.tw}}"
+              >
+                <span>{{state.relay.activeContact.initial}}</span>
+                <img
+                  class="absolute inset-0 size-full object-cover"
+                  alt=""
+                  wf-if="state.relay.activeContact.avatar"
+                  wf-src="state.relay.activeContact.avatar"
+                />
+              </div>
+              <div class="min-w-0">
+                <div class="font-semibold text-sm truncate">
+                  {{state.relay.activeContact.name}}
+                </div>
+                <div
+                  class="text-[10px] truncate"
+                  wf-class="{{state.relay.activeContact.presence === 'online' ? 'text-[#25D366]' : 'text-white/50'}}"
+                >
+                  {{state.relay.activeContact.memberLine}}
+                </div>
+              </div>
+            </div>
+            <div
+              class="text-[11px] text-amber-200 bg-amber-900/40 px-3 py-1"
+              wf-if="state.relay.error"
+            >
+              {{state.relay.error}}
+            </div>
+            <div
+              class="flex-1 overflow-y-auto p-4 space-y-2 bg-[radial-gradient(circle_at_top_left,rgba(255,105,180,0.08),transparent_40%)]"
+              wf-if="state.relay.activeContact"
+              wf-onattach="requestAnimationFrame(() =&gt; _1.scrollTop = _1.scrollHeight)"
+              data-chat-scroll="relay"
+            >
+              <div
+                class="flex"
+                wf-map="m of state.relay.messages"
+                wf-class="{{m.mine ? 'justify-end' : 'justify-start'}}"
+              >
+                <div
+                  class="max-w-[75%] rounded-2xl p-1.5 text-sm shadow"
+                  wf-class="{{m.mine ? 'bg-[#005c4b] rounded-br-md' : 'bg-[#1f2c34] rounded-bl-md'}}"
+                >
+                  <div
+                    class="px-1.5 pt-0.5 text-[10px] font-semibold text-[#25D366]"
+                    wf-if="state.relay.activeContact.isGroup &amp;&amp; !m.mine"
+                  >
+                    {{m.senderLabel}}
+                  </div>
+                  <div
+                    class="grid gap-1 grid-cols-2"
+                    wf-class="{{m.images.length === 1 ? 'grid-cols-1' : ''}}"
+                    wf-if="m.images.length"
+                  >
+                    <img
+                      class="rounded-xl w-full max-w-60 aspect-square object-cover cursor-zoom-in"
+                      alt=""
+                      wf-map="f of m.images"
+                      wf-src="f.url"
+                      wf-onclick="post('relay.openFile', f.path)"
+                    />
+                  </div>
+                  <video
+                    class="rounded-xl max-w-60"
+                    controls=""
+                    wf-map="f of m.videos"
+                    wf-src="f.url"
+                  ></video>
+                  <button
+                    class="flex items-center gap-2 rounded-xl bg-black/20 hover:bg-black/30 px-2 py-1.5 text-xs w-full text-left"
+                    wf-map="f of m.others"
+                    wf-onclick="post('relay.openFile', f.path)"
+                    value=""
+                  >
+                    <i class="nf nf-md-file text-base"></i
+                    ><span class="truncate">{{f.name}}</span>
+                  </button>
+                  <pre
+                    class="px-1.5 pt-0.5 whitespace-pre-wrap break-words font-[inherit]"
+                    wf-if="m.text"
+                  >
+{{m.text}}</pre
+                  >
+                  <div class="text-[10px] text-white/40 text-right px-1.5">
+                    {{m.time}}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div
+              class="p-3 flex gap-2 border-t border-white/10 bg-[#1f2c34]"
+              wf-if="state.relay.activeContact"
+            >
+              <button
+                class="size-10 rounded-full hover:bg-zinc-900/10 flex items-center justify-center text-white/70 shrink-0"
+                title="Send a file"
+                wf-onclick="post('relay.attach')"
+                value=""
+              >
+                <i class="nf nf-md-paperclip text-lg"></i>
+              </button>
+              <input
+                class="flex-1 min-w-0 rounded-full bg-[#2a3942] px-4 py-2 text-sm outline-none placeholder:text-white/40"
+                placeholder="Message…"
+                wf-value="state.relay.draft"
+                wf-onkeydown="event.key === 'Enter' &amp;&amp; post('relay.send')"
+                value=""
+              />
+              <button
+                class="size-10 rounded-full bg-[#25D366] flex items-center justify-center hover:brightness-110 shrink-0"
+                title="Send"
+                wf-onclick="post('relay.send')"
+                value=""
+              >
+                <i class="nf nf-md-send"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div
+          class="absolute right-0 bottom-0 size-4 cursor-se-resize opacity-70 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'se', event)"
+        ></div>
+        <div
+          class="absolute top-10 right-0 bottom-4 w-1.5 cursor-e-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'e', event)"
+        ></div>
+        <div
+          class="absolute left-0 right-4 bottom-0 h-1.5 cursor-s-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 's', event)"
+        ></div>
+      </div>
+    </div>
+  </body>
+</html>
