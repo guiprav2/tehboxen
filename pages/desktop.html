@@ -522,14 +522,14 @@
           </button>
           <div class="w-px h-7 bg-zinc-900/30 mx-1"></div>
           <button
-            class="h-10 px-3 rounded-xl flex items-center gap-2 hover:bg-zinc-900/20 border border-transparent"
+            class="h-10 px-3 rounded-xl flex items-center gap-2 hover:bg-zinc-900/20 border border-transparent max-w-56 min-w-0 shrink"
             wf-map="a of state.desktop.openWindows"
             wf-onclick="post('desktop.taskbarClick', a.id)"
             wf-class="{{state.desktop.activeApp === a.id ? 'bg-zinc-900/30 border-white/40' : 'bg-zinc-900/15'}}"
             value=""
           >
-            <i class="nf" wf-class="{{a.icon + ' ' + (a.iconTw || '')}}"></i
-            ><span class="text-xs font-semibold hidden sm:inline"
+            <i class="nf shrink-0" wf-class="{{a.icon + ' ' + (a.iconTw || '')}}"></i
+            ><span class="text-xs font-semibold hidden sm:inline truncate min-w-0"
               >{{a.shortTitle || a.title}}</span
             >
           </button>
