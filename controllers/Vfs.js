@@ -1,5 +1,5 @@
 import * as vfs from '../other/vfs.js';
-import { mediaExt, imageExt, videoExt, zipExt, appForPath } from '../other/vfs.js';
+import { mediaExt, imageExt, videoExt, archiveExt, appForPath } from '../other/vfs.js';
 
 export default class Vfs {
   state = {
@@ -24,7 +24,7 @@ export default class Vfs {
     api: () => vfs,
 
     /**
-     * Open a file with its associated app. Editor and WinZip get a new window
+     * Open a file with its associated app. Editor and Archiver get a new window
      * per file; Media Viewer is a single window that switches to the file.
      */
     openPath: async (path) => {
@@ -38,8 +38,8 @@ export default class Vfs {
             ')',
         );
       }
-      if (app === 'winzip' || zipExt(p)) {
-        return post('desktop.openApp', 'winzip', { openPath: p });
+      if (app === 'archiver' || archiveExt(p)) {
+        return post('desktop.openApp', 'archiver', { openPath: p });
       }
       if (app === 'mediaViewer' || mediaExt(p)) {
         await post('mediaViewer.open', p);
@@ -60,7 +60,7 @@ export default class Vfs {
         isMedia: !isDir && mediaExt(name),
         isImage: !isDir && imageExt(name),
         isVideo: !isDir && videoExt(name),
-        isZip: !isDir && zipExt(name),
+        isZip: !isDir && archiveExt(name),
       });
       for (let path of all) {
         if (prefix) {

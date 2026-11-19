@@ -1,0 +1,3 @@
+#!/bin/sh
+# named: authoritative zones from /etc/named/zones, recursion through forwarders (/etc/named.json).
+node /usr/sbin/named /etc/named.json >> /var/log/named.log 2>&1 &

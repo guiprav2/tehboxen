@@ -2,7 +2,7 @@
 /**
  * Host-side NPC wake monitor (Node — same stack as dbgserver).
  *
- * Tails `.tehboxen-dbg/events.ndjson` and prints one line per wake for Grok Build
+ * Tails `.tehboxen-dbg/events.ndjson` and prints one line per wake for the agent's monitor
  * `monitor` to pick up:
  *
  *   ACTION_REQUIRED: npc_message|<npc>|<peer>|<text>|<msgKey>|<dm|group>
@@ -356,7 +356,7 @@ async function scanStartStates() {
       body: `
         let { listUsers } = await import('../other/vfs-auth.js');
         let { loadProfile } = await import('../other/npc-life.js');
-        let skip = new Set(['root','nobody','grok','guest']);
+        let skip = new Set(['root','nobody','godshand','guest']);
         let out = [];
         for (let name of Object.keys(await listUsers()).sort()) {
           if (skip.has(name)) continue;

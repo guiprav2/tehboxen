@@ -321,6 +321,7 @@ async function main() {
           id,
           op: req.op || req.method,
           user: req.user ?? req.args?.user ?? null,
+          box: req.box ?? req.args?.box ?? null,
           args: req.args || {},
           timeoutMs,
         }).catch((err) => {
@@ -429,6 +430,8 @@ async function main() {
       id,
       op: req.body?.op || req.body?.method || 'ping',
       user: req.body?.user ?? null,
+      // Which machine: omitted/'local' = the player's box, 'root' = the root computer, or any /world/boxes id.
+      box: req.body?.box ?? null,
       args: req.body?.args || {},
       timeoutMs: req.body?.timeoutMs || 15000,
       ts: Date.now(),

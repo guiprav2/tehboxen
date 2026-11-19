@@ -311,7 +311,7 @@ export default class Relay {
 
   /**
    * First-run OS seed only. Cast / world chats live in the VFS world pack.
-   * When the Relay root has no peers yet, seed a Grok contact (empty
+   * When the Relay root has no peers yet, seed a God's Hand contact (empty
    * thread). The welcome / how-to lives in Mail.
    */
   async _seed() {
@@ -327,20 +327,20 @@ export default class Relay {
       let peers = entries.filter((p) => !p.endsWith('/profile.yaml') && !p.endsWith('/.keep'));
       if (peers.length) return;
     } catch {}
-    // Grok contact via real user + avatar hardlink (portrait lives in home/grok/).
+    // God's Hand contact via real user + avatar hardlink (portrait lives in home/godshand/).
     let { addContact } = await import('../other/chats.js');
-    await addContact(PLAYER, 'grok');
-    let dir = ROOT + '/grok';
+    await addContact(PLAYER, 'godshand');
+    let dir = ROOT + '/godshand';
     await ensureDir(dir + '/files');
     let profPath = dir + '/profile.yaml';
     let prev = (await readYaml(profPath, {}).catch(() => ({}))) || {};
     await writeYaml(profPath, {
       ...prev,
-      phone: prev.phone || 'grok',
-      name: 'Grok',
+      phone: prev.phone || 'godshand',
+      name: "God's Hand",
       about: prev.about || 'world builder · always here',
       color: prev.color || '#111827',
-      user: 'grok',
+      user: 'godshand',
       avatar: 'avatar.jpg',
     });
   }

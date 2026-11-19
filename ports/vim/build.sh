@@ -17,7 +17,7 @@ export CC="$WASI_SDK/bin/clang --target=wasm32-wasip1 --sysroot=$WASI_SDK/share/
 export CPPFLAGS="-DUSE_SYSTEM -include $TB/include/sys/wait.h -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_GETPID -D_WASI_EMULATED_MMAN -I$TB/include -include $TB/compat.h"
 export CFLAGS="-O2 -Wno-implicit-function-declaration"
 export LDFLAGS="-L$TB/lib/wasm32-wasip1 -L$FAKE -Wl,-z,stack-size=1048576"
-export LIBS="-ltehboxen -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-getpid -lwasi-emulated-mman -Wl,--export=__tehboxen_init -Wl,--wrap=stat,--wrap=lstat,--wrap=fstat,--wrap=fstatat"
+export LIBS="-ltehboxen -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-getpid -lwasi-emulated-mman $TB_LDFLAGS"
 export PKG_CONFIG=/bin/false  # never pick up the host's libraries
 export vim_cv_toupper_broken=no vim_cv_terminfo=no vim_cv_tgetent=zero vim_cv_getcwd_broken=no vim_cv_stat_ignores_slash=no \
   vim_cv_memmove_handles_overlap=yes vim_cv_bcopy_handles_overlap=yes vim_cv_memcpy_handles_overlap=no \

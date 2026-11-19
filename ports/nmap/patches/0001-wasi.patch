@@ -1,0 +1,515 @@
+diff --git a/libdnet-stripped/src/addr.c b/libdnet-stripped/src/addr.c
+index d094dee..655131b 100644
+--- a/libdnet-stripped/src/addr.c
++++ b/libdnet-stripped/src/addr.c
+@@ -318,7 +318,9 @@ addr_ston(const struct sockaddr *sa, struct addr *a)
+ # endif
+ #endif
+ 	case AF_UNSPEC:
++#ifndef __wasi__ /* WASI's AF_INET is 1 too; intf.c reads MACs itself there */
+ 	case ARP_HRD_ETH:	/* XXX- Linux arp(7) */
++#endif
+ 	case ARP_HRD_APPLETALK: /* AppleTalk DDP */
+ 	case ARP_HRD_INFINIBAND: /* InfiniBand */
+ 	case ARP_HDR_IEEE80211: /* IEEE 802.11 */
+diff --git a/libdnet-stripped/src/intf.c b/libdnet-stripped/src/intf.c
+index 5d8e25d..4136351 100644
+--- a/libdnet-stripped/src/intf.c
++++ b/libdnet-stripped/src/intf.c
+@@ -583,7 +583,14 @@ _intf_get_noalias(intf_t *intf, struct intf_entry *entry)
+ #elif defined(SIOCGIFHWADDR)
+ 		if (ioctl(intf->fd, SIOCGIFHWADDR, &ifr) < 0)
+ 			return (-1);
++#ifdef __wasi__
++		/* sa_family ARPHRD_ETHER (1) is AF_INET on WASI: take the MAC directly. */
++		addr_pack(&entry->intf_link_addr, ADDR_TYPE_ETH, ETH_ADDR_BITS,
++		    ifr.ifr_hwaddr.sa_data, ETH_ADDR_LEN);
++		if (0) {
++#else
+ 		if (addr_ston(&ifr.ifr_addr, &entry->intf_link_addr) < 0) {
++#endif
+ 			/* Likely we got an unsupported address type. Just use NONE for now. */
+ 			entry->intf_link_addr.addr_type = ADDR_TYPE_NONE;
+ 			entry->intf_link_addr.addr_bits = 0;
+diff --git a/libdnet-stripped/src/ndisc-linux.c b/libdnet-stripped/src/ndisc-linux.c
+index daa4851..076c334 100644
+--- a/libdnet-stripped/src/ndisc-linux.c
++++ b/libdnet-stripped/src/ndisc-linux.c
+@@ -1,3 +1,17 @@
++#ifdef __wasi__
++/* Tehboxen: no IPv6 neighbor tables (no netlink). */
++#include "config.h"
++#include <errno.h>
++#include <stdlib.h>
++#include "dnet.h"
++
++ndisc_t *ndisc_open(void) { errno = ENOSYS; return (NULL); }
++int ndisc_add(ndisc_t *n, const struct ndisc_entry *e) { (void)n; (void)e; errno = ENOSYS; return (-1); }
++int ndisc_delete(ndisc_t *n, const struct ndisc_entry *e) { (void)n; (void)e; errno = ENOSYS; return (-1); }
++int ndisc_get(ndisc_t *n, struct ndisc_entry *e) { (void)n; (void)e; errno = ENOSYS; return (-1); }
++int ndisc_loop(ndisc_t *n, ndisc_handler cb, void *arg) { (void)n; (void)cb; (void)arg; return (0); }
++ndisc_t *ndisc_close(ndisc_t *n) { (void)n; return (NULL); }
++#else
+ /*
+  * ndisc-linux.c
+  *
+@@ -194,3 +208,4 @@ ndisc_close(ndisc_t *n)
+ 	}
+ 	return (NULL);
+ }
++#endif /* __wasi__ */
+diff --git a/libdnet-stripped/src/route-linux.c b/libdnet-stripped/src/route-linux.c
+index 4aaf90e..b825cac 100644
+--- a/libdnet-stripped/src/route-linux.c
++++ b/libdnet-stripped/src/route-linux.c
+@@ -1,3 +1,140 @@
++#ifdef __wasi__
++/*
++ * Tehboxen: no netlink or routing ioctls. Routes are read from the kernel's
++ * /proc/net/route; route_get() is a longest-prefix match over it. Changing
++ * routes goes through `ip route`, not libdnet.
++ */
++#include "config.h"
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include "dnet.h"
++
++#define RTF_UP 0x0001
++
++struct route_handle {
++	int unused;
++};
++
++route_t *
++route_open(void)
++{
++	return calloc(1, sizeof(route_t));
++}
++
++int
++route_add(route_t *r, const struct route_entry *entry)
++{
++	(void)r; (void)entry;
++	errno = EPERM;
++	return (-1);
++}
++
++int
++route_add_dev(route_t *r, const struct route_entry *entry, const char *dev)
++{
++	(void)dev;
++	return route_add(r, entry);
++}
++
++int
++route_delete(route_t *r, const struct route_entry *entry)
++{
++	return route_add(r, entry);
++}
++
++int
++route_loop(route_t *r, route_handler callback, void *arg)
++{
++	FILE *fp;
++	struct route_entry entry;
++	char buf[BUFSIZ];
++	char ifbuf[16];
++	int ret = 0;
++	(void)r;
++
++	if ((fp = fopen("/proc/net/route", "r")) == NULL)
++		return (-1);
++	while (fgets(buf, sizeof(buf), fp) != NULL) {
++		int i, iflags, refcnt, use, metric, mss, win, irtt;
++		uint32_t mask;
++		memset(&entry, 0, sizeof(entry));
++		i = sscanf(buf, "%15s %X %X %X %d %d %d %X %d %d %d\n",
++		    ifbuf, &entry.route_dst.addr_ip,
++		    &entry.route_gw.addr_ip, &iflags, &refcnt, &use,
++		    &metric, &mask, &mss, &win, &irtt);
++		if (i < 11 || !(iflags & RTF_UP))
++			continue;
++		strlcpy(entry.intf_name, ifbuf, sizeof(entry.intf_name));
++		entry.route_dst.addr_type = entry.route_gw.addr_type = ADDR_TYPE_IP;
++		if (addr_mtob(&mask, IP_ADDR_LEN, &entry.route_dst.addr_bits) < 0)
++			continue;
++		entry.route_gw.addr_bits = IP_ADDR_BITS;
++		entry.metric = metric;
++		if ((ret = callback(&entry, arg)) != 0)
++			break;
++	}
++	fclose(fp);
++	return (ret);
++}
++
++struct best_route {
++	uint32_t dst;
++	int bits;
++	struct route_entry found;
++};
++
++static int
++best_route_cb(const struct route_entry *e, void *arg)
++{
++	struct best_route *b = arg;
++	uint32_t mask;
++	if (e->route_dst.addr_type != ADDR_TYPE_IP)
++		return (0);
++	addr_btom(e->route_dst.addr_bits, &mask, IP_ADDR_LEN);
++	if ((b->dst & mask) != (e->route_dst.addr_ip & mask))
++		return (0);
++	if (e->route_dst.addr_bits > b->bits) {
++		b->bits = e->route_dst.addr_bits;
++		b->found = *e;
++	}
++	return (0);
++}
++
++int
++route_get(route_t *r, struct route_entry *entry)
++{
++	struct best_route b;
++	if (entry->route_dst.addr_type != ADDR_TYPE_IP) {
++		errno = EAFNOSUPPORT;
++		return (-1);
++	}
++	memset(&b, 0, sizeof(b));
++	b.dst = entry->route_dst.addr_ip;
++	b.bits = -1;
++	route_loop(r, best_route_cb, &b);
++	if (b.bits < 0) {
++		errno = ESRCH;
++		return (-1);
++	}
++	entry->route_gw = b.found.route_gw;
++	if (entry->route_gw.addr_ip == 0) /* on-link: the destination is the next hop */
++		entry->route_gw = entry->route_dst;
++	entry->route_gw.addr_bits = IP_ADDR_BITS;
++	strlcpy(entry->intf_name, b.found.intf_name, sizeof(entry->intf_name));
++	entry->metric = b.found.metric;
++	return (0);
++}
++
++route_t *
++route_close(route_t *r)
++{
++	free(r);
++	return (NULL);
++}
++#else
+ /*
+  * route-linux.c
+  *
+@@ -401,3 +538,4 @@ route_close(route_t *r)
+ 	}
+ 	return (NULL);
+ }
++#endif /* __wasi__ */
+diff --git a/libnetutil/NetBlock.cc b/libnetutil/NetBlock.cc
+index 065e6c8..da42fac 100644
+--- a/libnetutil/NetBlock.cc
++++ b/libnetutil/NetBlock.cc
+@@ -606,9 +606,14 @@ void NetBlockIPv6Netmask::apply_netmask(int bits) {
+ #ifdef _AIX
+   const struct in6_addr zeros = { { { 0x00, 0x00, 0x00, 0x00 } } };
+   const struct in6_addr ones = { { { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff } } };
++#else
++#ifdef __wasi__ /* wasi-libc's in6_addr is a plain byte array (no union) */
++  const struct in6_addr zeros = { { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00} };
++  const struct in6_addr ones = { { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff} };
+ #else
+   const struct in6_addr zeros = { { { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00} } };
+   const struct in6_addr ones = { { { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff} } };
++#endif
+ #endif
+   struct in6_addr mask;
+ 
+diff --git a/libpcap/pcap-null.c b/libpcap/pcap-null.c
+index f0e35ec..d9bffc2 100644
+--- a/libpcap/pcap-null.c
++++ b/libpcap/pcap-null.c
+@@ -25,6 +25,245 @@
+ 
+ #include "pcap-int.h"
+ 
++
++#ifdef __wasi__
++/*
++ * Tehboxen: live capture on the box's simulated interfaces. The kernel's AF_PACKET
++ * sockets hand over every frame in or out of an interface (Ethernet framing, real
++ * MACs); filters run here in userland (pcapint_filter), injection is a send().
++ */
++#include <errno.h>
++#include <fcntl.h>
++#include <poll.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/ioctl.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <unistd.h>
++#include <net/if.h>
++#include <netinet/in.h>
++#include <netpacket/packet.h>
++#include <arpa/inet.h>
++
++struct pcap_tehboxen {
++	int ifindex;
++	u_int packets_received;
++	u_int packets_dropped;
++};
++
++static int
++tb_read(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
++{
++	struct pcap_tehboxen *pt = p->priv;
++	int n = 0;
++	for (;;) {
++		if (p->break_loop) {
++			p->break_loop = 0;
++			return (PCAP_ERROR_BREAK);
++		}
++		if (n > 0 && (cnt <= 0 || n >= cnt) && !PACKET_COUNT_IS_UNLIMITED(cnt))
++			return (n);
++		/* Wait for a frame: the timeout (or immediately, non-blocking). */
++		struct pollfd pfd = { p->fd, POLLIN, 0 };
++		int wait = p->opt.nonblock ? 0 : (p->opt.timeout > 0 ? p->opt.timeout : -1);
++		if (n > 0)
++			wait = 0;
++		int r = poll(&pfd, 1, wait);
++		if (r < 0) {
++			if (errno == EINTR)
++				continue;
++			pcapint_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE, errno, "poll");
++			return (PCAP_ERROR);
++		}
++		if (r == 0)
++			return (n);
++		struct sockaddr_ll from;
++		socklen_t fl = sizeof(from);
++		ssize_t len = recvfrom(p->fd, p->buffer, p->bufsize, 0, (struct sockaddr *)&from, &fl);
++		if (len < 0) {
++			if (errno == EAGAIN || errno == EINTR)
++				return (n);
++			pcapint_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE, errno, "recvfrom");
++			return (PCAP_ERROR);
++		}
++		if (p->direction == PCAP_D_IN && from.sll_pkttype == PACKET_OUTGOING)
++			continue;
++		if (p->direction == PCAP_D_OUT && from.sll_pkttype != PACKET_OUTGOING)
++			continue;
++		pt->packets_received++;
++		u_int caplen = (u_int)len > (u_int)p->snapshot ? (u_int)p->snapshot : (u_int)len;
++		if (p->fcode.bf_insns && !pcapint_filter(p->fcode.bf_insns, p->fcode.bf_len, p->buffer, (u_int)len, caplen))
++			continue;
++		struct pcap_pkthdr h;
++		gettimeofday(&h.ts, NULL);
++		h.caplen = caplen;
++		h.len = (u_int)len;
++		callback(user, &h, p->buffer);
++		n++;
++		if (!PACKET_COUNT_IS_UNLIMITED(cnt) && n >= cnt)
++			return (n);
++	}
++}
++
++static int
++tb_inject(pcap_t *p, const void *buf, int size)
++{
++	ssize_t r = send(p->fd, buf, (size_t)size, 0);
++	if (r < 0) {
++		pcapint_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE, errno, "send");
++		return (PCAP_ERROR);
++	}
++	return ((int)r);
++}
++
++static int
++tb_stats(pcap_t *p, struct pcap_stat *ps)
++{
++	struct pcap_tehboxen *pt = p->priv;
++	ps->ps_recv = pt->packets_received;
++	ps->ps_drop = pt->packets_dropped;
++	ps->ps_ifdrop = 0;
++	return (0);
++}
++
++static int
++tb_setdirection(pcap_t *p, pcap_direction_t d)
++{
++	p->direction = d;
++	return (0);
++}
++
++static void
++tb_cleanup(pcap_t *p)
++{
++	pcapint_cleanup_live_common(p);
++}
++
++static int
++tb_activate(pcap_t *p)
++{
++	struct pcap_tehboxen *pt = p->priv;
++	const char *dev = p->opt.device;
++	int any = !dev || !strcmp(dev, "any");
++	pt->ifindex = any ? 0 : (int)if_nametoindex(dev);
++	if (!any && !pt->ifindex) {
++		snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "%s: No such device exists", dev);
++		return (PCAP_ERROR_NO_SUCH_DEVICE);
++	}
++	p->fd = socket(AF_PACKET, SOCK_RAW, htons(0x0003 /* ETH_P_ALL */));
++	if (p->fd < 0) {
++		if (errno == EPERM || errno == EACCES) {
++			snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "%s: You don't have permission to perform this capture on that device (socket: Operation not permitted)", dev ? dev : "any");
++			return (PCAP_ERROR_PERM_DENIED);
++		}
++		pcapint_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE, errno, "socket");
++		return (PCAP_ERROR);
++	}
++	if (!any) {
++		struct sockaddr_ll ll;
++		memset(&ll, 0, sizeof(ll));
++		ll.sll_family = AF_PACKET;
++		ll.sll_protocol = htons(0x0003);
++		ll.sll_ifindex = pt->ifindex;
++		if (bind(p->fd, (struct sockaddr *)&ll, sizeof(ll)) < 0) {
++			pcapint_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE, errno, "bind");
++			close(p->fd);
++			return (PCAP_ERROR);
++		}
++	}
++	if (p->snapshot <= 0 || p->snapshot > MAXIMUM_SNAPLEN)
++		p->snapshot = MAXIMUM_SNAPLEN;
++	p->linktype = DLT_EN10MB;
++	p->bufsize = 65536 + 64;
++	p->buffer = malloc(p->bufsize);
++	if (!p->buffer) {
++		pcapint_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE, errno, "malloc");
++		close(p->fd);
++		return (PCAP_ERROR);
++	}
++	if (p->opt.nonblock)
++		fcntl(p->fd, F_SETFL, fcntl(p->fd, F_GETFL) | O_NONBLOCK);
++	p->selectable_fd = p->fd;
++	p->read_op = tb_read;
++	p->inject_op = tb_inject;
++	p->setfilter_op = pcapint_install_bpf_program;
++	p->setdirection_op = tb_setdirection;
++	p->set_datalink_op = NULL;
++	p->getnonblock_op = pcapint_getnonblock_fd;
++	p->setnonblock_op = pcapint_setnonblock_fd;
++	p->stats_op = tb_stats;
++	p->cleanup_op = tb_cleanup;
++	return (0);
++}
++
++pcap_t *
++pcapint_create_interface(const char *device _U_, char *ebuf)
++{
++	pcap_t *p = PCAP_CREATE_COMMON(ebuf, struct pcap_tehboxen);
++	if (p == NULL)
++		return (NULL);
++	p->activate_op = tb_activate;
++	return (p);
++}
++
++static int
++tb_if_flags(const char *name _U_, bpf_u_int32 *flags, char *errbuf _U_)
++{
++	*flags |= PCAP_IF_CONNECTION_STATUS_CONNECTED;
++	return (0);
++}
++
++int
++pcapint_platform_finddevs(pcap_if_list_t *devlistp, char *errbuf)
++{
++	struct if_nameindex *list = if_nameindex();
++	int s = socket(AF_INET, SOCK_DGRAM, 0);
++	if (!list)
++		return (0);
++	for (struct if_nameindex *i = list; i->if_index; i++) {
++		struct ifreq r;
++		bpf_u_int32 flags = 0;
++		memset(&r, 0, sizeof(r));
++		strncpy(r.ifr_name, i->if_name, IFNAMSIZ - 1);
++		if (ioctl(s, SIOCGIFFLAGS, &r) == 0) {
++			if (r.ifr_flags & IFF_UP)
++				flags |= PCAP_IF_UP;
++			if (r.ifr_flags & IFF_RUNNING)
++				flags |= PCAP_IF_RUNNING;
++			if (r.ifr_flags & IFF_LOOPBACK)
++				flags |= PCAP_IF_LOOPBACK;
++		}
++		pcap_if_t *d = pcapint_find_or_add_dev(devlistp, i->if_name, flags, tb_if_flags, NULL, errbuf);
++		if (!d)
++			continue;
++		struct ifreq ra, rm, rb;
++		memcpy(&ra, &r, sizeof r);
++		memcpy(&rm, &r, sizeof r);
++		memcpy(&rb, &r, sizeof r);
++		if (ioctl(s, SIOCGIFADDR, &ra) == 0) {
++			int hm = ioctl(s, SIOCGIFNETMASK, &rm) == 0;
++			int hb = ioctl(s, SIOCGIFBRDADDR, &rb) == 0 && !(flags & PCAP_IF_LOOPBACK);
++			pcapint_add_addr_to_dev(d, &ra.ifr_addr, sizeof(struct sockaddr_in),
++			    hm ? &rm.ifr_netmask : NULL, hm ? sizeof(struct sockaddr_in) : 0,
++			    hb ? &rb.ifr_broadaddr : NULL, hb ? sizeof(struct sockaddr_in) : 0,
++			    NULL, 0, errbuf);
++		}
++	}
++	if_freenameindex(list);
++	if (s >= 0)
++		close(s);
++	if (pcap_add_any_dev(devlistp, errbuf) == NULL)
++		return (-1);
++	return (0);
++}
++
++const char *
++pcap_lib_version(void)
++{
++	return (PCAP_VERSION_STRING " (Tehboxen AF_PACKET)");
++}
++#else
+ static char nosup[] = "live packet capture not supported on this system";
+ 
+ pcap_t *
+@@ -61,3 +300,4 @@ pcap_lib_version(void)
+ {
+ 	return (PCAP_VERSION_STRING);
+ }
++#endif /* __wasi__ */
+diff --git a/nsock/src/netutils.c b/nsock/src/netutils.c
+index 4d6177b..e717a6d 100644
+--- a/nsock/src/netutils.c
++++ b/nsock/src/netutils.c
+@@ -123,7 +123,7 @@ rlim_t maximize_fdlimit(void) {
+   return 0;
+ }
+ 
+-#if HAVE_SYS_UN_H
++#if HAVE_SYS_UN_H && !defined(__wasi__) /* WASI: no Unix sockets */
+   #define PEER_STR_LEN sizeof(((struct sockaddr_un *) 0)->sun_path)
+ #else
+   #define PEER_STR_LEN sizeof("[ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255]:xxxxx")
+@@ -132,12 +132,17 @@ rlim_t maximize_fdlimit(void) {
+ #if HAVE_SYS_UN_H
+ /* Get the UNIX domain socket path or empty string if the address family != AF_UNIX. */
+ const char *get_unixsock_path(const struct sockaddr_storage *addr) {
++#ifdef __wasi__
++  (void)addr;
++  return "";
++#else
+   struct sockaddr_un *su = (struct sockaddr_un *)addr;
+ 
+   if (!addr || addr->ss_family != AF_UNIX)
+     return "";
+ 
+   return (const char *)su->sun_path;
++#endif
+ }
+ #endif
+ 

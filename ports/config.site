@@ -1,0 +1,21 @@
+# autoconf site defaults for Tehboxen ports (CONFIG_SITE=$PORTS/config.site, set by env.sh).
+# compat.h is force-included and declares what libtehboxen adds to wasi-libc, so autoconf's
+# `char f();` link probes for those functions fail to compile; declare them present instead.
+for f in sigaction sigprocmask pthread_sigmask sigsuspend sigemptyset sigfillset sigaddset sigdelset sigismember \
+  siginterrupt sigpending alarm pause setitimer getitimer ualarm getrlimit setrlimit \
+  chown fchown lchown fchownat setuid setgid seteuid setegid setreuid setregid setgroups initgroups getgroups \
+  getgrouplist getppid setsid getsid getpgrp setpgid getuid geteuid getgid getegid umask kill \
+  mkstemp mkostemp mkstemps mkostemps mkdtemp mktemp mknod tmpfile tzset tcgetpgrp tcsetpgrp \
+  socket bind connect listen sendto recvfrom setsockopt getsockname getpeername sendmsg recvmsg \
+  gethostname getaddrinfo freeaddrinfo gai_strerror getnameinfo gethostbyname gethostbyaddr \
+  getservbyname getservbyport getprotobyname if_nametoindex if_indextoname if_nameindex \
+  ether_ntoa ether_aton res_init res_query dn_expand system popen pclose execvp execv execve execl execlp \
+  tcgetattr tcsetattr cfmakeraw getpwnam getpwuid getgrnam getgrgid getpwent setpwent endpwent \
+  openlog syslog vsyslog closelog settimeofday; do
+  eval "ac_cv_func_$f=\${ac_cv_func_$f=yes}"
+done
+# fork exists (it fails at run time, like a fork-less system) — let configure know there is no fork.
+ac_cv_func_fork=${ac_cv_func_fork=no}
+ac_cv_func_vfork=${ac_cv_func_vfork=no}
+ac_cv_func_fork_works=${ac_cv_func_fork_works=no}
+ac_cv_func_vfork_works=${ac_cv_func_vfork_works=no}

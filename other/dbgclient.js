@@ -224,8 +224,10 @@ async function handleRpc(msg) {
   let args = msg.args || {};
   let user = msg.user ?? args.user ?? null;
   if (user === '' || user === undefined) user = null;
+  // `box: "<id>"` runs the op on another machine of the world (the root computer is 'root').
+  let box = msg.box ?? args.box ?? null;
   try {
-    let result = await runOp(op, args, user);
+    let result = box && box !== 'local' ? await runBoxOp(String(box), op, args, user) : await runOp(op, args, user);
     send({ type: 'rpc_result', id, result });
   } catch (err) {
     // Prefer message when code is a bare number (vfs-auth uses code:1 for EACCES).
@@ -245,6 +247,33 @@ async function handleRpc(msg) {
   }
 }
 
+/** shell / vfs.read / vfs.write / vfs.put on another box, via its kernel. */
+async function runBoxOp(box, op, args, user) {
+  let { boxHandle } = await import('./net/boot.js');
+  let h = await boxHandle(box);
+  switch (op) {
+    case 'ping':
+      return h.rpc('ping');
+    case 'shell': {
+      let r = await h.rpc('exec', { cmd: String(args.cmd ?? args.command ?? ''), user: user || 'root', cwd: args.cwd });
+      return { ...r, text: (r.stdout || '') + (r.stderr || ''), box };
+    }
+    case 'vfs.read':
+    case 'vfs.get': {
+      let v = await h.rpc('get', { path: args.path });
+      return v instanceof Uint8Array ? { base64: btoa(String.fromCharCode(...v)), size: v.length } : { text: v };
+    }
+    case 'vfs.write':
+    case 'vfs.put': {
+      let data = args.base64 != null ? Uint8Array.from(atob(args.base64), (c) => c.charCodeAt(0)) : String(args.text ?? args.data ?? '');
+      let mode = args.mode != null ? (typeof args.mode === 'string' ? parseInt(args.mode, 8) : Number(args.mode)) : 0o644;
+      await h.rpc('put', { path: args.path, data, mode, owner: args.owner ?? 0, group: args.group ?? 0 });
+      return { ok: true };
+    }
+  }
+  throw Object.assign(new Error(`op ${op} is not available on box ${box}`), { code: 'ENOSYS' });
+}
+
 async function runOp(op, args, user) {
   await vfs.ensureReady();
   // Default RPC identity: nobody (shared dirs only). Pass user:"<player>" etc. to act as someone.
@@ -253,6 +282,16 @@ async function runOp(op, args, user) {
   switch (op) {
     case 'ping':
       return { pong: true, ts: Date.now(), user: username };
+
+    case 'world.boxes': {
+      let { listBoxes } = await import('./net/boot.js');
+      return listBoxes();
+    }
+
+    case 'world.apply': {
+      let { applyWorld } = await import('./net/boot.js');
+      return applyWorld();
+    }
 
     case 'shell': {
       if (username === 'nobody') {

@@ -40,7 +40,9 @@ __attribute__((import_module("tehboxen"), import_name("mode"))) int __tehboxen_m
 __attribute__((import_module("tehboxen"), import_name("owner"))) int __tehboxen_owner(const char *path, size_t len, int follow, unsigned *out);
 __attribute__((import_module("tehboxen"), import_name("fd_owner"))) int __tehboxen_fd_owner(int fd, unsigned *out);
 
+static void snapshot_env(void);
 __attribute__((constructor)) void __tehboxen_init(void) {
+  snapshot_env();
   char buf[1024];
   int n = __tehboxen_getcwd(buf, sizeof buf - 1);
   if (n <= 0 || n >= (int)sizeof buf) return;
@@ -380,15 +382,161 @@ int fork(void) {
   return -1;
 }
 int vfork(void) { return fork(); }
+/*
+ * exec without replacing the process image: run the program (through the shell, PATH
+ * lookup included) and exit with its status — what the caller observes is the same,
+ * except the pid. Programs that fork() first still fail at the fork.
+ */
+int tehboxen_run_argv(char *const argv[]);
+static int exec_as(const char *p, char *const a[]) {
+  if (!a || !a[0]) {
+    errno = EINVAL;
+    return -1;
+  }
+  char **argv = (char **)a;
+  char *saved = argv[0];
+  argv[0] = (char *)p; /* run the named file; argv[0] is the program name otherwise */
+  int st = tehboxen_run_argv(argv);
+  argv[0] = saved;
+  if (st < 0) return -1;
+  if ((st & 0x7f) == 0 && ((st >> 8) & 0xff) == 127) {
+    errno = ENOENT;
+    return -1;
+  }
+  fflush(NULL);
+  _exit((st & 0x7f) ? 128 + (st & 0x7f) : (st >> 8) & 0xff);
+}
 int execve(const char *p, char *const a[], char *const e[]) {
-  (void)p, (void)a, (void)e;
-  errno = ENOSYS;
+  (void)e;
+  return exec_as(p, a);
+}
+int execv(const char *p, char *const a[]) { return exec_as(p, a); }
+int execvp(const char *p, char *const a[]) { return exec_as(p, a); }
+/*
+ * Fork-less children: tehboxen_spawn() runs argv through the shell right away
+ * (synchronously, like system()) and records its wait status under a made-up
+ * pid, which waitpid()/wait() then reap. Ports replace fork+exec with it.
+ */
+static struct { int pid, status; } children[32];
+static int next_child_pid = 30000;
+
+static char *join_argv(char *const argv[]) {
+  size_t n = 1;
+  for (int i = 0; argv[i]; i++) {
+    char *q = quote(argv[i]);
+    if (!q) return 0;
+    n += strlen(q) + 1;
+    free(q);
+  }
+  char *cmd = malloc(n), *o = cmd;
+  if (!cmd) return 0;
+  for (int i = 0; argv[i]; i++) {
+    char *q = quote(argv[i]);
+    size_t l = strlen(q);
+    memcpy(o, q, l);
+    o += l;
+    *o++ = argv[i + 1] ? ' ' : 0;
+    free(q);
+  }
+  if (o == cmd) *o = 0;
+  return cmd;
+}
+
+/* The environment the program started with: spawned commands get what it changed since
+ * (udhcpc hands its lease to the script that way), as VAR='value' prefix assignments. */
+extern char **environ;
+static char **initial_env;
+void __wasilibc_ensure_environ(void);
+static void snapshot_env(void) {
+  __wasilibc_ensure_environ(); /* wasi-libc fills environ lazily */
+  size_t n = 0;
+  while (environ && environ[n]) n++;
+  initial_env = calloc(n + 1, sizeof(char *));
+  for (size_t i = 0; initial_env && i < n; i++) initial_env[i] = strdup(environ[i]);
+}
+static int in_initial(const char *kv) {
+  for (size_t i = 0; initial_env && initial_env[i]; i++)
+    if (!strcmp(initial_env[i], kv)) return 1;
+  return 0;
+}
+static char *env_prefix(void) {
+  size_t n = 1;
+  for (char **e = environ; e && *e; e++) {
+    if (in_initial(*e)) continue;
+    char *q = quote(*e);
+    if (q) n += strlen(q) + 1, free(q);
+  }
+  char *out = malloc(n), *o = out;
+  if (!out) return 0;
+  for (char **e = environ; e && *e; e++) {
+    const char *eq = strchr(*e, '=');
+    if (!eq || eq == *e || in_initial(*e)) continue;
+    /* NAME='value' (quote only the value) */
+    size_t kl = (size_t)(eq - *e);
+    int ok = 1;
+    for (size_t i = 0; i < kl; i++) {
+      char c = (*e)[i];
+      if (!(c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (i && c >= '0' && c <= '9'))) ok = 0;
+    }
+    if (!ok) continue;
+    char *q = quote(eq + 1);
+    if (!q) continue;
+    memcpy(o, *e, kl + 1);
+    o += kl + 1;
+    size_t ql = strlen(q);
+    memcpy(o, q, ql);
+    o += ql;
+    *o++ = ' ';
+    free(q);
+  }
+  *o = 0;
+  return out;
+}
+
+/** Run argv (PATH lookup by the shell); returns its wait status, or -1. */
+int tehboxen_run_argv(char *const argv[]) {
+  __wasilibc_ensure_environ();
+  char *args = join_argv(argv);
+  char *pre = env_prefix();
+  char *cmd = args && pre ? malloc(strlen(pre) + strlen(args) + 1) : 0;
+  if (cmd) {
+    strcpy(cmd, pre);
+    strcat(cmd, args);
+  }
+  free(args);
+  free(pre);
+  if (!cmd) {
+    errno = ENOMEM;
+    return -1;
+  }
+  int st = run(cmd);
+  free(cmd);
+  return st;
+}
+
+/** "Fork and exec" argv: runs it now; returns a pid for waitpid(). */
+int tehboxen_spawn(char *const argv[]) {
+  int st = tehboxen_run_argv(argv);
+  if (st < 0) return -1;
+  for (int i = 0; i < 32; i++)
+    if (!children[i].pid) {
+      children[i].pid = next_child_pid++;
+      children[i].status = st;
+      return children[i].pid;
+    }
+  errno = EAGAIN;
   return -1;
 }
-int execv(const char *p, char *const a[]) { return execve(p, a, 0); }
-int execvp(const char *p, char *const a[]) { return execve(p, a, 0); }
+
 int waitpid(int pid, int *st, int opt) {
-  (void)pid, (void)st, (void)opt;
+  (void)opt;
+  for (int i = 0; i < 32; i++)
+    if (children[i].pid && (pid == -1 || pid == 0 || children[i].pid == pid)) {
+      int p = children[i].pid;
+      if (st) *st = children[i].status;
+      children[i].pid = 0;
+      return p;
+    }
   errno = ECHILD;
   return -1;
 }
@@ -427,6 +575,9 @@ static void apply(struct stat *st, const unsigned *o) {
   st->st_mode = (st->st_mode & S_IFMT) | (o[0] & 07777);
   st->st_uid = o[1];
   st->st_gid = o[2];
+  /* WASI filestat has no block counts (du, ls -s): 512-byte blocks of 4K pages, like ext4. */
+  st->st_blksize = 4096;
+  st->st_blocks = S_ISDIR(st->st_mode) ? 8 : ((st->st_size + 4095) / 4096) * 8;
 }
 
 static void fix_path(const char *path, struct stat *st, int follow) {

@@ -116,10 +116,19 @@ function loadLibTehboxen() {
       if (!res.ok) throw new Error(`${p}: ${res.status}`);
       return new Uint8Array(await res.arrayBuffer());
     };
-    let [compat, wait, termios, pwd, grp, lib, libThreads] = await Promise.all(['compat.h', 'include/sys/wait.h', 'include/termios.h', 'include/pwd.h', 'include/grp.h', 'lib/wasm32-wasip1/libtehboxen.a', 'lib/wasm32-wasip1-threads/libtehboxen.a'].map(get));
+    let headers = ['sys/wait.h', 'sys/sysmacros.h', 'termios.h', 'pwd.h', 'grp.h', 'netdb.h', 'paths.h', 'syslog.h', 'resolv.h', 'net/if.h', 'net/ethernet.h', 'netinet/if_ether.h', 'netinet/ether.h'];
+    let [compat, lib, libThreads, ...hdrs] = await Promise.all(['compat.h', 'lib/wasm32-wasip1/libtehboxen.a', 'lib/wasm32-wasip1-threads/libtehboxen.a', ...headers.map((h) => 'include/' + h)].map(get));
+    // Nested tree for the mounted /usr/tehboxen/include.
+    let include = {};
+    headers.forEach((h, i) => {
+      let parts = h.split('/');
+      let dir = include;
+      for (let p of parts.slice(0, -1)) dir = dir[p] ??= {};
+      dir[parts[parts.length - 1]] = hdrs[i];
+    });
     return {
       'compat.h': compat,
-      include: { sys: { 'wait.h': wait }, 'termios.h': termios, 'pwd.h': pwd, 'grp.h': grp },
+      include,
       lib: { 'wasm32-wasip1': { 'libtehboxen.a': lib }, 'wasm32-wasip1-threads': { 'libtehboxen.a': libThreads } },
     };
   })();
@@ -723,7 +732,7 @@ export async function runTool(o) {
   // libtehboxen: declarations on every compile, the library on every link (see loadLibTehboxen).
   if (usr.tehboxen && !args.some((a) => a === '-nostdinc' || a === '-ffreestanding')) args.unshift('-include', '/usr/tehboxen/compat.h', '-idirafter', '/usr/tehboxen/include');
   if (usr.tehboxen && !compileOnly && !args.some((a) => a === '-nostdlib' || a === '-nodefaultlibs')) {
-    args.push(`-L/usr/tehboxen/lib/${wantsThreads ? 'wasm32-wasip1-threads' : 'wasm32-wasip1'}`, '-Wl,--export=__tehboxen_init', '-Wl,--wrap=stat,--wrap=lstat,--wrap=fstat,--wrap=fstatat', '-ltehboxen');
+    args.push(`-L/usr/tehboxen/lib/${wantsThreads ? 'wasm32-wasip1-threads' : 'wasm32-wasip1'}`, '-Wl,--export=__tehboxen_init', '-Wl,--wrap=stat,--wrap=lstat,--wrap=fstat,--wrap=fstatat,--wrap=getsockopt,--wrap=accept,--wrap=accept4,--wrap=ioctl,--wrap=dup,--wrap=dup2,--wrap=dup3,--wrap=chmod,--wrap=fchmod,--wrap=fchmodat', '-ltehboxen');
   }
   // Informational invocations and -### itself run in one step, no jobs.
   if (!args.length || args.some((a) => /^(-###|--version|--help|-help|--help-hidden|-dumpversion|-dumpmachine|-print-[\w-]+(=.*)?)$/.test(a))) {

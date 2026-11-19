@@ -1,0 +1,57 @@
+diff --git a/src/common/mythread.h b/src/common/mythread.h
+index bec69b4..550c50f 100644
+--- a/src/common/mythread.h
++++ b/src/common/mythread.h
+@@ -79,7 +79,7 @@ do { \
+ 
+ 
+ #if !(defined(_WIN32) && !defined(__CYGWIN__)) \
+-		&& (!defined(__wasm__) || defined(__EMSCRIPTEN__))
++		&& (!defined(__wasm__) || defined(__EMSCRIPTEN__) || defined(__wasi__))
+ // Use sigprocmask() to set the signal mask in single-threaded programs.
+ #include <signal.h>
+ 
+diff --git a/src/xz/file_io.c b/src/xz/file_io.c
+index 6f784dd..3805923 100644
+--- a/src/xz/file_io.c
++++ b/src/xz/file_io.c
+@@ -141,13 +141,20 @@ io_init(void)
+ 	// we are root.
+ 	warn_fchown = geteuid() == 0;
+ 
++#ifdef __wasi__
++	// Tehboxen: no pipe(); signals are only delivered inside blocking
++	// syscalls, so poll() on the data fd alone sees user_abort promptly.
++	user_abort_pipe[0] = user_abort_pipe[1] = -1;
++	if (0)
++#else
+ 	// Create a pipe for the self-pipe trick.
+ 	if (pipe(user_abort_pipe))
++#endif
+ 		message_fatal(_("Error creating a pipe: %s"),
+ 				strerror(errno));
+ 
+ 	// Make both ends of the pipe non-blocking.
+-	for (unsigned i = 0; i < 2; ++i) {
++	for (unsigned i = 0; i < 2 && user_abort_pipe[i] >= 0; ++i) {
+ 		int flags = fcntl(user_abort_pipe[i], F_GETFL);
+ 		if (flags == -1 || fcntl(user_abort_pipe[i], F_SETFL,
+ 				flags | O_NONBLOCK) == -1)
+@@ -176,6 +183,8 @@ io_write_to_user_abort_pipe(void)
+ 	// handler. So ignore the errors and try to avoid warnings with
+ 	// GCC and glibc when _FORTIFY_SOURCE=2 is used.
+ 	uint8_t b = '\0';
++	if (user_abort_pipe[1] < 0)
++		return;
+ 	const ssize_t ret = write(user_abort_pipe[1], &b, 1);
+ 	(void)ret;
+ 	return;
+@@ -219,7 +228,7 @@ io_wait(file_pair *pair, int timeout, bool is_reading)
+ 	pfd[1].events = POLLIN;
+ 
+ 	while (true) {
+-		const int ret = poll(pfd, 2, timeout);
++		const int ret = poll(pfd, user_abort_pipe[0] < 0 ? 1 : 2, timeout);
+ 
+ 		if (user_abort)
+ 			return IO_WAIT_ERROR;

@@ -1,0 +1,4 @@
+# The player's own machine (runs on the desktop page itself).
+hostname: tehboxen
+interfaces:
+  - { name: eth0, segment: home, addr: dhcp }

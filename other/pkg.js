@@ -35,6 +35,13 @@ function bar(label, done, total, columns = 80, detail = '') {
   return `${label} [\x1b[32m${'█'.repeat(fill)}\x1b[2m${'░'.repeat(width - fill)}\x1b[0m] ${pct}${detail ? '  ' + detail : ''}`;
 }
 
+/** One progress line for an install event { phase, done, total } (also used while busybox installs at boot). */
+export function progressLine(label, { phase, done: d, total }, columns = 80) {
+  let what = phase === 'download' ? 'Fetching' : phase === 'unpack' ? 'Unpacking' : 'Removing';
+  let detail = phase === 'download' ? (total ? `${mb(d)}/${mb(total)}` : mb(d)) : `${d}/${total} files`;
+  return bar(`${label} ${what}`.trim(), d, total, columns, detail);
+}
+
 /**
  * @param {string[]} args
  * @param {{ actor: { uid: number }, live?: { out: (s: string) => void, err: (s: string) => void } }} ctx

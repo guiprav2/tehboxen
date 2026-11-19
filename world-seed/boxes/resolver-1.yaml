@@ -1,0 +1,6 @@
+# Public recursive resolver.
+image: dns-resolver
+hostname: resolver1.public-dns.net
+interfaces:
+  - { name: eth0, segment: internet, addr: 8.8.8.8/32, onlink: true }
+dns: [127.0.0.1]

@@ -1,0 +1,224 @@
+#!/usr/bin/env node
+// named: a small DNS server (interim, until dnsmasq is ported).
+//   node /usr/sbin/named /etc/named.json
+// Config: { "listen": "0.0.0.0", "port": 53, "zones": "/etc/named/zones",
+//           "recursion": false, "forwarders": ["198.41.0.4"] }
+// Zones are BIND-style files named <origin>.zone; they're re-read when changed.
+// Authoritative answers (with NS referrals for delegated subzones) for its
+// zones; with recursion on, everything else is forwarded and cached.
+'use strict';
+const dgram = require('dgram');
+const fs = require('fs');
+const path = require('path');
+
+const conf = JSON.parse(fs.readFileSync(process.argv[2] || '/etc/named.json', 'utf8'));
+const T = { A: 1, NS: 2, CNAME: 5, SOA: 6, PTR: 12, MX: 15, TXT: 16, AAAA: 28, SRV: 33, ANY: 255 };
+const norm = (n) => String(n || '').toLowerCase().replace(/\.+$/, '');
+const log = (...a) => console.log(new Date().toISOString(), ...a);
+
+/* ---------- wire format ---------- */
+function readName(b, off) {
+  let labels = [], jumped = false, end = off;
+  for (let g = 0; g < 128; g++) {
+    let len = b[off];
+    if (len === 0) { if (!jumped) end = off + 1; break; }
+    if ((len & 0xc0) === 0xc0) { if (!jumped) end = off + 2; off = ((len & 0x3f) << 8) | b[off + 1]; jumped = true; continue; }
+    labels.push(b.toString('utf8', off + 1, off + 1 + len));
+    off += 1 + len;
+  }
+  return { name: labels.join('.'), next: end };
+}
+function decode(b) {
+  let flags = b.readUInt16BE(2);
+  let m = { id: b.readUInt16BE(0), qr: !!(flags & 0x8000), rd: !!(flags & 0x100), opcode: (flags >> 11) & 15, questions: [] };
+  let off = 12;
+  for (let i = 0, n = b.readUInt16BE(4); i < n; i++) {
+    let { name, next } = readName(b, off);
+    m.questions.push({ name, type: b.readUInt16BE(next), cls: b.readUInt16BE(next + 2) });
+    off = next + 4;
+  }
+  return m;
+}
+function nameBytes(n) {
+  let parts = [];
+  for (let l of norm(n).split('.').filter(Boolean)) { let s = Buffer.from(l); parts.push(Buffer.from([s.length]), s); }
+  parts.push(Buffer.from([0]));
+  return Buffer.concat(parts);
+}
+function rdata(r) {
+  let d = r.data;
+  switch (r.type) {
+    case T.A: return Buffer.from(d.split('.').map(Number));
+    case T.NS: case T.CNAME: case T.PTR: return nameBytes(d);
+    case T.MX: { let p = Buffer.alloc(2); p.writeUInt16BE(d.preference); return Buffer.concat([p, nameBytes(d.exchange)]); }
+    case T.TXT: return Buffer.concat(d.map((s) => { let x = Buffer.from(s).subarray(0, 255); return Buffer.concat([Buffer.from([x.length]), x]); }));
+    case T.SOA: { let n = Buffer.alloc(20); ['serial', 'refresh', 'retry', 'expire', 'minimum'].forEach((k, i) => n.writeUInt32BE(d[k] >>> 0, i * 4)); return Buffer.concat([nameBytes(d.mname), nameBytes(d.rname), n]); }
+    case T.SRV: { let h = Buffer.alloc(6); h.writeUInt16BE(d.priority, 0); h.writeUInt16BE(d.weight, 2); h.writeUInt16BE(d.port, 4); return Buffer.concat([h, nameBytes(d.target)]); }
+  }
+  return Buffer.alloc(0);
+}
+function encode(q, { rcode = 0, aa = false, ra = false, answers = [], authorities = [], additionals = [] }) {
+  let h = Buffer.alloc(12);
+  h.writeUInt16BE(q.id, 0);
+  h.writeUInt16BE(0x8000 | (aa ? 0x400 : 0) | (q.rd ? 0x100 : 0) | (ra ? 0x80 : 0) | rcode, 2);
+  h.writeUInt16BE(q.questions.length, 4);
+  h.writeUInt16BE(answers.length, 6);
+  h.writeUInt16BE(authorities.length, 8);
+  h.writeUInt16BE(additionals.length, 10);
+  let parts = [h];
+  for (let x of q.questions) { let t = Buffer.alloc(4); t.writeUInt16BE(x.type, 0); t.writeUInt16BE(x.cls || 1, 2); parts.push(nameBytes(x.name), t); }
+  for (let r of [...answers, ...authorities, ...additionals]) {
+    let rd = rdata(r);
+    let t = Buffer.alloc(10);
+    t.writeUInt16BE(r.type, 0); t.writeUInt16BE(1, 2); t.writeUInt32BE(r.ttl >>> 0, 4); t.writeUInt16BE(rd.length, 8);
+    parts.push(nameBytes(r.name), t, rd);
+  }
+  return Buffer.concat(parts);
+}
+
+/* ---------- zones ---------- */
+let zones = new Map(); // origin → { records, soa }
+let zonesStamp = '';
+function parseZone(text, origin) {
+  let ttl = 3600, records = [], last = origin, buf = '', depth = 0, lines = [];
+  for (let raw of text.split('\n')) {
+    let line = raw.replace(/;.*$/, '');
+    for (let ch of line) depth += ch === '(' ? 1 : ch === ')' ? -1 : 0;
+    buf += ' ' + line.replace(/[()]/g, ' ');
+    if (depth <= 0) { lines.push({ text: buf, indented: /^\s/.test(raw) && buf.trim() !== '' }); buf = ''; depth = 0; }
+  }
+  let abs = (n) => (n === '@' ? origin : n.endsWith('.') ? norm(n) : norm(`${n}.${origin}`));
+  for (let { text: l, indented } of lines) {
+    let w = l.match(/"(?:[^"\\]|\\.)*"|\S+/g);
+    if (!w) continue;
+    if (w[0] === '$ORIGIN') { origin = norm(w[1]); continue; }
+    if (w[0] === '$TTL') { ttl = Number(w[1]) || ttl; continue; }
+    let name = last;
+    if (!indented) { name = abs(w.shift()); last = name; }
+    let rttl = ttl;
+    while (w.length && (/^\d+$/.test(w[0]) || w[0] === 'IN')) { let x = w.shift(); if (x !== 'IN') rttl = Number(x); }
+    let type = String(w.shift() || '').toUpperCase();
+    let data;
+    switch (type) {
+      case 'A': data = w[0]; break;
+      case 'NS': case 'CNAME': case 'PTR': data = abs(w[0]); break;
+      case 'MX': data = { preference: Number(w[0]), exchange: abs(w[1]) }; break;
+      case 'TXT': data = w.map((x) => (x.startsWith('"') ? JSON.parse(x) : x)); break;
+      case 'SOA': data = { mname: abs(w[0]), rname: abs(w[1]), serial: +w[2], refresh: +w[3], retry: +w[4], expire: +w[5], minimum: +w[6] }; break;
+      case 'SRV': data = { priority: +w[0], weight: +w[1], port: +w[2], target: abs(w[3]) }; break;
+      default: continue;
+    }
+    records.push({ name, type: T[type], ttl: rttl, data });
+  }
+  return { records, soa: records.find((r) => r.type === T.SOA) };
+}
+function loadZones() {
+  let dir = conf.zones || '/etc/named/zones';
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.zone')).sort(); } catch {}
+  let stamp = files.map((f) => { try { return f + ':' + fs.statSync(path.join(dir, f)).mtimeMs; } catch { return f; } }).join('|');
+  if (stamp === zonesStamp) return;
+  zonesStamp = stamp;
+  let next = new Map();
+  for (let f of files) {
+    let origin = norm(f.slice(0, -5));
+    try { next.set(origin, parseZone(fs.readFileSync(path.join(dir, f), 'utf8'), origin)); }
+    catch (err) { log(`zone ${f}: ${err.message}`); }
+  }
+  zones = next;
+  log(`loaded ${zones.size} zone(s): ${[...zones.keys()].join(', ') || '-'}`);
+}
+
+/** The zone that owns a name (longest origin suffix). */
+function zoneFor(name) {
+  let best = null;
+  for (let o of zones.keys()) if ((name === o || name.endsWith('.' + o)) && (!best || o.length > best.length)) best = o;
+  return best;
+}
+
+function authoritative(q) {
+  let { name, type } = q.questions[0];
+  name = norm(name);
+  let origin = zoneFor(name);
+  if (origin == null) return null;
+  let z = zones.get(origin);
+  // Delegation: NS records for a name between the query and the apex.
+  for (let cut = name; cut !== origin && cut.includes('.'); cut = cut.slice(cut.indexOf('.') + 1)) {
+    let ns = z.records.filter((r) => r.name === cut && r.type === T.NS);
+    if (ns.length && cut !== origin) {
+      let glue = z.records.filter((r) => r.type === T.A && ns.some((n) => n.data === r.name));
+      return { authorities: ns, additionals: glue };
+    }
+  }
+  let answers = [];
+  let target = name;
+  for (let hops = 0; hops < 8; hops++) {
+    let here = z.records.filter((r) => r.name === target);
+    let cname = here.find((r) => r.type === T.CNAME);
+    if (cname && type !== T.CNAME) {
+      answers.push(cname);
+      target = norm(cname.data);
+      if (zoneFor(target) !== origin) break;
+      continue;
+    }
+    answers.push(...here.filter((r) => type === T.ANY || r.type === type));
+    if (!here.length && !answers.length) return { aa: true, rcode: 3, authorities: z.soa ? [z.soa] : [] };
+    break;
+  }
+  return { aa: true, answers, authorities: answers.length ? [] : z.soa ? [z.soa] : [] };
+}
+
+/* ---------- forwarding ---------- */
+let cache = new Map();
+function forward(msg, q) {
+  let key = q.questions.map((x) => `${norm(x.name)}/${x.type}`).join(' ');
+  let hit = cache.get(key);
+  if (hit && hit.expires > Date.now()) {
+    let b = Buffer.from(hit.bytes);
+    b.writeUInt16BE(q.id, 0);
+    return Promise.resolve(b);
+  }
+  return new Promise((resolve) => {
+    let ups = [...(conf.forwarders || [])];
+    let sock = dgram.createSocket('udp4');
+    let timer = null;
+    let tryNext = () => {
+      let ns = ups.shift();
+      if (!ns) { sock.close(); return resolve(null); }
+      sock.send(msg, 53, ns);
+      timer = setTimeout(tryNext, 3000);
+    };
+    sock.on('message', (res) => {
+      clearTimeout(timer);
+      sock.close();
+      let rcode = res.readUInt16BE(2) & 15;
+      if (rcode === 0 || rcode === 3) cache.set(key, { bytes: Buffer.from(res), expires: Date.now() + (rcode === 3 ? 60e3 : 300e3) });
+      resolve(res);
+    });
+    sock.on('error', () => tryNext());
+    tryNext();
+  });
+}
+
+/* ---------- server ---------- */
+const server = dgram.createSocket('udp4');
+server.on('message', async (msg, rinfo) => {
+  let q;
+  try { q = decode(msg); } catch { return; }
+  if (q.qr || !q.questions.length) return;
+  loadZones();
+  let qd = q.questions[0];
+  let res = authoritative(q);
+  let out;
+  if (res) out = encode(q, { ...res, ra: !!conf.recursion });
+  else if (conf.recursion && q.rd) {
+    let fwd = await forward(msg, q);
+    out = fwd || encode(q, { rcode: 2, ra: true });
+  } else out = encode(q, { rcode: 5 });
+  log(`${rinfo.address}#${rinfo.port} ${norm(qd.name)} ${Object.keys(T).find((k) => T[k] === qd.type) || qd.type} -> rcode ${out.readUInt16BE(2) & 15}`);
+  server.send(out, rinfo.port, rinfo.address);
+});
+server.on('listening', () => log(`named listening on ${conf.listen || '0.0.0.0'}:${conf.port || 53} (recursion ${conf.recursion ? 'on' : 'off'})`));
+server.on('error', (err) => { log(`error: ${err.message}`); process.exit(1); });
+loadZones();
+server.bind(conf.port || 53, conf.listen || '0.0.0.0');

@@ -1,0 +1,7 @@
+# Minimal server: root, /etc/rc running /etc/rc.d/* at boot.
+version: 1
+packages: []
+users:
+  - { name: root, uid: 0, gid: 0, home: /root, shell: /bin/sh }
+modes:
+  /etc/rc: "755"

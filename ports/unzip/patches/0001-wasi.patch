@@ -1,0 +1,16 @@
+diff --git a/unix/unxcfg.h b/unix/unxcfg.h
+index a3ad576..53ba89a 100644
+--- a/unix/unxcfg.h
++++ b/unix/unxcfg.h
+@@ -136,6 +136,11 @@ typedef struct stat z_stat;
+ #    define GOT_UTIMBUF
+ #  endif
+ #endif
++#if (defined(__wasi__) && !defined(GOT_UTIMBUF))
++#  include <unistd.h>
++#  include <utime.h>
++#  define GOT_UTIMBUF
++#endif
+ #if (defined(__DGUX__) && !defined(GOT_UTIMBUF))
+    /* DG/UX requires this because of a non-standard struct utimebuf */
+ #  include <utime.h>

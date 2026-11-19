@@ -3,9 +3,9 @@
  * browserify's builtins table (lib/builtins.js), but wired to the Tehboxen
  * VFS, shell and per-process runtime instead of browser shims.
  *
- * Networking (net/http/dns/tls/...) is deliberately not simulated yet: the
- * plan is fake servers compiled to WASM inside the VFS. Those modules load
- * but their functions throw ENOSYS so scripts fail with a clear message.
+ * Networking (net, dgram, dns, http, https) runs on the box's simulated
+ * network (other/node/netmods.js → other/net/procnet.js); tls/http2 are
+ * still ENOSYS.
  */
 import { Buffer } from 'https://cdn.jsdelivr.net/npm/buffer@6.0.3/+esm';
 import eventsMod from 'https://cdn.jsdelivr.net/npm/events@3.3.0/+esm';
@@ -15,6 +15,7 @@ import path from './path.js';
 import { inspect, format, formatWithOptions } from './inspect.js';
 import { NODE_VERSION, parseEnv } from './runtime.js';
 import { createWasiModule } from './wasi.js';
+import { createNetModules } from './netmods.js';
 
 export { Buffer };
 export let EventEmitter = eventsMod.EventEmitter || eventsMod;
@@ -1006,7 +1007,13 @@ function osModule(ctx) {
     release: () => '6.8.0-tehboxen',
     version: () => '#1 SMP PREEMPT_DYNAMIC Tehboxen',
     machine: () => 'x86_64',
-    hostname: () => env.HOSTNAME || 'tehboxen',
+    hostname: () => {
+      try {
+        return ctx.sys.sync('net.hostname', {});
+      } catch {
+        return env.HOSTNAME || 'tehboxen';
+      }
+    },
     homedir: () => '/' + String(actor.home || '').replace(/^\/+/, ''),
     tmpdir: () => '/tmp',
     endianness: () => 'LE',
@@ -1022,10 +1029,13 @@ function osModule(ctx) {
         times: { user: 100000, nice: 0, sys: 50000, idle: 1000000, irq: 0 },
       })),
     userInfo: () => ({ uid: Number(actor.uid), gid: Number(actor.gid), username: actor.name, homedir: '/' + String(actor.home || '').replace(/^\/+/, ''), shell: actor.shell || '/bin/boxsh' }),
-    networkInterfaces: () => ({
-      lo: [{ address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: '127.0.0.1/8' }],
-      eth0: [{ address: '10.13.37.' + (10 + (Number(actor.uid) % 200)), netmask: '255.255.255.0', family: 'IPv4', mac: '02:42:0a:0d:25:0a', internal: false, cidr: '10.13.37.0/24' }],
-    }),
+    networkInterfaces: () => {
+      try {
+        return ctx.sys.sync('net.ifaces', {});
+      } catch {
+        return { lo: [{ address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: '127.0.0.1/8' }] };
+      }
+    },
     getPriority: () => 0,
     setPriority: () => {},
     constants: {
@@ -1158,6 +1168,8 @@ export function createBuiltins(ctx) {
   let cache = new Map();
   let { rt, nodeFs } = ctx;
   let util;
+  let netModsCache = null;
+  let netMods = () => (netModsCache ??= createNetModules({ sys: ctx.sys, ref: () => rt.ref() }));
   let factories = {
     events: () => eventsModule(),
     util: () => (util ??= utilModule()),
@@ -1292,14 +1304,14 @@ export function createBuiltins(ctx) {
     trace_events: () => ({ createTracing: () => ({ enable() {}, disable() {} }), getEnabledCategories: () => '' }),
     repl: () => ({ start: enosys('repl.start()') }),
     wasi: () => createWasiModule({ sys: ctx.sys, path, stdio: ctx.stdio, cwd: () => rt.process.cwd(), exit: (c) => rt.process.exit(c), ref: () => rt.ref(), tty: { stdin: !!ctx.stdinTty, stdout: !!ctx.tty }, ids: () => [Number(ctx.actor?.uid) || 0, Number(ctx.actor?.gid) || 0] }),
-    net: () => ({ ...stubModule('net', ['createServer', 'createConnection', 'connect']), Socket: enosys('net.Socket'), Server: enosys('net.Server'), isIP: (s) => (/^(\d{1,3}\.){3}\d{1,3}$/.test(s) ? 4 : s.includes(':') ? 6 : 0), isIPv4: (s) => /^(\d{1,3}\.){3}\d{1,3}$/.test(s), isIPv6: (s) => s.includes(':') }),
-    http: () => ({ ...stubModule('http', ['createServer', 'request', 'get']), STATUS_CODES: { 200: 'OK', 201: 'Created', 204: 'No Content', 301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable' }, METHODS: ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT'], Agent: class {}, globalAgent: {} }),
-    https: () => ({ ...stubModule('https', ['createServer', 'request', 'get']), Agent: class {}, globalAgent: {} }),
+    net: () => netMods().net,
+    http: () => netMods().http,
+    https: () => netMods().https,
     http2: () => stubModule('http2', ['createServer', 'createSecureServer', 'connect']),
     tls: () => stubModule('tls', ['createServer', 'connect', 'createSecureContext']),
-    dgram: () => stubModule('dgram', ['createSocket']),
-    dns: () => ({ ...stubModule('dns', ['lookup', 'resolve', 'resolve4', 'resolve6', 'reverse', 'resolveTxt', 'resolveMx']), promises: get('dns/promises') }),
-    'dns/promises': () => stubModule('dns.promises', ['lookup', 'resolve', 'resolve4', 'resolve6', 'reverse']),
+    dgram: () => netMods().dgram,
+    dns: () => netMods().dns,
+    'dns/promises': () => netMods()['dns/promises'],
     cluster: () => ({ isPrimary: true, isMaster: true, isWorker: false, fork: enosys('cluster.fork()'), on() {}, workers: {} }),
     test: () => ({ test: enosys('node:test'), describe: enosys('node:test describe'), it: enosys('node:test it') }),
     sqlite: () => ({ DatabaseSync: enosys('node:sqlite DatabaseSync') }),

@@ -1,6 +1,17 @@
+import { archiveKind } from './archives.js';
 import localforage from 'https://cdn.jsdelivr.net/npm/localforage@1.10.0/+esm';
 
-let STORE_NAME = 'tehboxen-vfs';
+/**
+ * Which machine this realm is. The page is the player's own box (store
+ * 'tehboxen-vfs'); every other box runs in a Worker named 'box:<id>'
+ * (other/box/kernel.js) with its own store, users and files.
+ */
+export let BOX_ID = typeof window === 'undefined' && /^box:/.test(globalThis.name || '') ? String(globalThis.name).slice(4) : null;
+/** Server boxes skip the player-world seed (godshand, places, safehouse). */
+export let IS_SERVER = BOX_ID != null;
+/** The root computer (world building) keeps godshand, the world-builder account. */
+let NO_GODSHAND = IS_SERVER && BOX_ID !== 'root';
+let STORE_NAME = BOX_ID ? 'tehboxen-box-' + BOX_ID : 'tehboxen-vfs';
 let META_KEY = '__tehboxen_vfs_meta__';
 let STAT_KEY = '__tehboxen_vfs_stat__';
 let USERS_KEY = '__tehboxen_users__';
@@ -10,8 +21,8 @@ let SHADOW_KEY = '__tehboxen_shadow__';
 
 export let ROOT_UID = 0;
 export let PLAYER_UID = 1000;
-/** Grok — built-in world-building assistant; sudoer, not an NPC. */
-export let GROK_UID = 999;
+/** God's Hand (godshand) — built-in world-building account; sudoer, not an NPC. */
+export let GODSHAND_UID = 999;
 export let NOBODY_UID = 65534;
 export let DEFAULT_FILE_MODE = 0o644;
 export let DEFAULT_DIR_MODE = 0o755;
@@ -592,15 +603,15 @@ async function ensureAuthSeed() {
     usersChanged = true;
   }
 
-  // grok — built-in world builder (uid 999), sudoer.
-  if (!users.grok) {
-    users.grok = {
-      name: 'grok',
-      uid: GROK_UID,
-      gid: GROK_UID,
-      home: 'home/grok',
+  // godshand (God's Hand) — built-in world builder (uid 999), sudoer. Not on servers.
+  if (!users.godshand && !NO_GODSHAND) {
+    users.godshand = {
+      name: 'godshand',
+      uid: GODSHAND_UID,
+      gid: GODSHAND_UID,
+      home: 'home/godshand',
       shell: '/bin/boxsh',
-      gecos: 'Grok',
+      gecos: "God's Hand",
     };
     usersChanged = true;
   }
@@ -625,21 +636,21 @@ async function ensureAuthSeed() {
     groupsChanged = true;
   }
 
-  if (!groups.grok) {
-    groups.grok = { name: 'grok', gid: GROK_UID, members: ['grok'] };
+  if (!groups.godshand && !NO_GODSHAND) {
+    groups.godshand = { name: 'godshand', gid: GODSHAND_UID, members: ['godshand'] };
     groupsChanged = true;
-  } else if (!groups.grok.members?.includes('grok')) {
-    groups.grok.members = [...new Set([...(groups.grok.members || []), 'grok'])];
+  } else if (groups.godshand && !groups.godshand.members?.includes('godshand')) {
+    groups.godshand.members = [...new Set([...(groups.godshand.members || []), 'godshand'])];
     groupsChanged = true;
   }
 
   if (!groups.sudo) {
-    groups.sudo = { name: 'sudo', gid: 27, members: ['grok'] };
+    groups.sudo = { name: 'sudo', gid: 27, members: ['godshand'] };
     groupsChanged = true;
   } else {
     let sudoMem = new Set(groups.sudo.members || []);
     let sudoBefore = sudoMem.size;
-    sudoMem.add('grok');
+    sudoMem.add('godshand');
     if (sudoMem.size !== sudoBefore) {
       groups.sudo.members = [...sudoMem];
       groupsChanged = true;
@@ -650,11 +661,11 @@ async function ensureAuthSeed() {
     groups.world = {
       name: 'world',
       gid: 100,
-      members: ['grok', 'nobody', 'root'],
+      members: ['godshand', 'nobody', 'root'],
     };
     groupsChanged = true;
   } else {
-    let need = ['grok', 'nobody', 'root'];
+    let need = ['godshand', 'nobody', 'root'];
     let mem = new Set(groups.world.members || []);
     let before = mem.size;
     for (let n of need) mem.add(n);
@@ -669,6 +680,15 @@ async function ensureAuthSeed() {
     groupsChanged = true;
   }
 
+  if (NO_GODSHAND) {
+    // Plain servers have no world builder: drop godshand from the seeded groups.
+    for (let g of Object.values(groups)) {
+      if (g.members?.includes('godshand')) {
+        g.members = g.members.filter((m) => m !== 'godshand');
+        groupsChanged = true;
+      }
+    }
+  }
   if (usersChanged) await store.setItem(USERS_KEY, users);
   if (groupsChanged) await store.setItem(GROUPS_KEY, groups);
   usersCache = users;
@@ -680,7 +700,12 @@ async function ensureAuthSeed() {
     await store.setItem(META_KEY, meta);
   }
 
-  await ensureGrokHome(users.grok);
+  if (IS_SERVER) {
+    await ensureServerDirs();
+    if (!NO_GODSHAND) await ensureGodsHandHome(users.godshand);
+    return;
+  }
+  await ensureGodsHandHome(users.godshand);
   await ensureSharedWorldDirs(users.root);
   // dbg / ensureDir / writeYaml often write as root; keep homes owned by their user.
   await repairHomeOwnerships();
@@ -792,12 +817,12 @@ async function migrateAuthV3() {
   // Legacy BambiOS single-player migration; tehboxen stores start at v3.
 }
 
-/** Ensure home/grok skeleton exists (idempotent). */
-async function ensureGrokHome(grokUser) {
-  if (!grokUser) return;
-  let uid = Number(grokUser.uid);
-  let gid = Number(grokUser.gid);
-  let home = grokUser.home || 'home/grok';
+/** Ensure home/godshand skeleton exists (idempotent). */
+async function ensureGodsHandHome(user) {
+  if (!user) return;
+  let uid = Number(user.uid);
+  let gid = Number(user.gid);
+  let home = user.home || 'home/godshand';
   if ((await store.getItem(home + '/.keep')) == null) {
     await putRaw(home + '/.keep', '', { kind: 'dir', mode: 0o750, uid, gid });
   } else {
@@ -815,9 +840,16 @@ async function ensureGrokHome(grokUser) {
   if ((await store.getItem(home + '/profile.yaml')) == null) {
     await putRaw(
       home + '/profile.yaml',
-      'id: grok\nname: Grok\nabout: world builder\n',
+      "id: godshand\nname: God's Hand\nabout: world builder\n",
       { kind: 'file', mode: DEFAULT_FILE_MODE, uid, gid },
     );
+  }
+}
+
+/** Server boxes: the usual top-level directories, /tmp sticky. */
+async function ensureServerDirs() {
+  for (let [dir, mode] of [['etc', 0o755], ['root', 0o700], ['var', 0o755], ['var/log', 0o755], ['usr', 0o755], ['srv', 0o755], ['tmp', 0o1777]]) {
+    if ((await store.getItem(dir + '/.keep')) == null) await putRaw(dir + '/.keep', '', { kind: 'dir', mode, uid: ROOT_UID, gid: ROOT_UID });
   }
 }
 
@@ -1359,8 +1391,13 @@ export async function getStat(path) {
   let hit = dir != null ? stats[dir] : stats[key];
   if (hit) return hit;
   // Refresh from IDB once — multiple ESM copies (cache-bust imports) can
-  // diverge in-memory while sharing the same localforage store.
-  statCache = null;
+  // diverge in-memory while sharing the same localforage store. Never while this copy has
+  // unsaved stat changes (or one landed during the read): the stored table lacks them, and
+  // swapping it in would silently drop them.
+  if (!statDirty && !statWriter) {
+    let fresh = await store.getItem(STAT_KEY);
+    if (fresh && !statDirty && !statWriter) statCache = fresh;
+  }
   stats = await loadStats();
   return dir != null ? stats[dir] || null : stats[key] || null;
 }
@@ -1953,9 +1990,12 @@ export async function copy(from, to, opts = {}) {
   else await rawWrite(dest, text ?? '');
 }
 
-export function zipExt(path) {
-  return /\.zip$/i.test(path || '');
+/** An archive Archiver opens (zip, tar[.gz|.xz|.bz2], .gz, .xz, .bz2…: other/archives.js). */
+export function archiveExt(path) {
+  return archiveKind(path) != null;
 }
+/** Old name of archiveExt (Explorer's archive icon). */
+export let zipExt = archiveExt;
 
 export function textExt(path) {
   let p = String(path || '');
@@ -1971,7 +2011,7 @@ export function textExt(path) {
 
 /** Which Tehboxen app should open this path, or null if none. */
 export function appForPath(path) {
-  if (zipExt(path)) return 'winzip';
+  if (archiveExt(path)) return 'archiver';
   if (mediaExt(path)) return 'mediaViewer';
   if (textExt(path)) return 'editor';
   return null;
@@ -2008,7 +2048,9 @@ export async function listKinds() {
  */
 export async function writeMany(entries, opts = {}) {
   await ensureReady();
-  let stats = await loadStats();
+  // New stats go into `fresh` and merge into the live table at the end with no await in
+  // between: holding the table across awaits would clobber concurrent setStat()s.
+  let fresh = {};
   let now = Date.now();
   let uid = opts.uid ?? ROOT_UID;
   let gid = opts.gid ?? ROOT_UID;
@@ -2019,15 +2061,28 @@ export async function writeMany(entries, opts = {}) {
   for (let e of entries) {
     let key = normalize(e.path);
     if (!key) continue;
+    if (e.symlink != null) {
+      // { path, symlink: target }: a symbolic link (packages ship applet links this way). Same
+      // storage as ln -s / symlink(2): absolute → root-relative key, relative → './x' (relative
+      // to the link's directory), the text as written kept in linkText.
+      let t = String(e.symlink);
+      let stored = t.startsWith('/') ? t.replace(/^\/+/, '') : t.startsWith('.') ? t : './' + t;
+      pending.push(store.setItem(key, { __tehboxen_symlink__: stored }));
+      fresh[key] = { kind: 'symlink', mode: 0o777, uid: e.uid ?? uid, gid: e.gid ?? gid, target: stored, linkText: t, mtime: now };
+      written.push(key);
+      let parts = key.split('/');
+      for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
+      continue;
+    }
     let data = e.data instanceof Uint8Array ? new Blob([e.data]) : e.data ?? '';
-    let prev = stats[key];
+    let prev = (await loadStats())[key];
     pending.push(prev?.ino != null ? store.setItem(inodeKey(prev.ino), data) : store.setItem(key, data));
-    stats[key] = {
+    fresh[key] = {
       ...(prev?.ino != null ? { ino: prev.ino, nlink: prev.nlink } : {}),
       kind: 'file',
       mode: (e.mode ?? prev?.mode ?? DEFAULT_FILE_MODE) & 0o7777,
-      uid: prev?.uid ?? uid,
-      gid: prev?.gid ?? gid,
+      uid: e.uid ?? prev?.uid ?? uid,
+      gid: e.gid ?? prev?.gid ?? gid,
       mtime: now,
     };
     written.push(key);
@@ -2037,15 +2092,15 @@ export async function writeMany(entries, opts = {}) {
   await Promise.all(pending);
   let newDirs = [];
   for (let dir of [...dirs].sort()) {
-    if (stats[dir]?.kind === 'dir' || (await store.getItem(dir + '/.keep')) != null) continue;
+    if ((await loadStats())[dir]?.kind === 'dir' || (await store.getItem(dir + '/.keep')) != null) continue;
     await store.setItem(dir + '/.keep', '');
-    stats[dir] = { kind: 'dir', mode: opts.dirMode ?? DEFAULT_DIR_MODE, uid, gid, mtime: now };
+    fresh[dir] = { kind: 'dir', mode: opts.dirMode ?? DEFAULT_DIR_MODE, uid, gid, mtime: now };
     newDirs.push(dir);
   }
-  statCache = stats;
+  Object.assign(await loadStats(), fresh);
   await saveStats();
   for (let dir of newDirs) notify('write', dir + '/.keep', 'dir');
-  for (let key of written) notify('write', key, 'file');
+  for (let key of written) notify('write', key, fresh[key]?.kind === 'symlink' ? 'symlink' : 'file');
   return written.length;
 }
 

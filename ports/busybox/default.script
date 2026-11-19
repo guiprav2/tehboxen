@@ -1,0 +1,28 @@
+#!/bin/sh
+# udhcpc's default script (/usr/share/udhcpc/default.script): configure the interface
+# from the lease with ip(8) and write /etc/resolv.conf. udhcpc passes the event as $1
+# and the lease in the environment ($interface, $ip, $mask, $router, $dns, $domain).
+[ -z "$1" ] && echo "Error: should be called from udhcpc" >&2 && exit 1
+RESOLV_CONF=/etc/resolv.conf
+case "$1" in
+  deconfig)
+    ip addr flush dev "$interface"
+    ip link set dev "$interface" up
+    ;;
+  renew|bound)
+    ip addr flush dev "$interface"
+    ip addr add "$ip/${mask:-24}" dev "$interface"
+    if [ -n "$router" ]; then
+      while ip route del default dev "$interface" 2>/dev/null; do :; done
+      for gw in $router; do
+        ip route add default via "$gw" dev "$interface"
+      done
+    fi
+    : > "$RESOLV_CONF"
+    [ -n "$domain" ] && echo "search $domain" >> "$RESOLV_CONF"
+    for ns in $dns; do
+      echo "nameserver $ns" >> "$RESOLV_CONF"
+    done
+    ;;
+esac
+exit 0

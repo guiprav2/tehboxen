@@ -1,0 +1,18 @@
+# The player's home router: NAT to the Internet, DHCP and a DNS forwarder on the LAN.
+hostname: home-router
+interfaces:
+  - { name: wan, segment: internet, addr: 73.42.18.9/32 }
+  - { name: lan, segment: home, addr: 192.168.1.1/24 }
+routes:
+  - { to: default, dev: wan }
+masquerade: [wan]
+forwards: []
+dhcp:
+  iface: lan
+  range: 192.168.1.100-192.168.1.199
+  dns: [192.168.1.1]
+  domain: lan
+  lease: 86400
+dns:
+  listen: lan
+  forwarders: [8.8.8.8, 1.1.1.1]

@@ -1,0 +1,284 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Archiver.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="Archiver"
+        class="flex flex-col overflow-hidden shadow-2xl shadow-amber-900/30 border border-white/40 bg-[#0d1117] text-zinc-200 w-[680px] h-[500px] shrink-0 rounded-3xl @container/app"
+        wf-class="{{this.win.frameClass}}"
+        wf-onclick="post('desktop.focusApp', this.winId)"
+        wf-onattach="post('desktop.registerWindow', this.winId)"
+      >
+        <div
+          class="h-10 shrink-0 flex items-center gap-2 px-3 bg-gradient-to-r from-amber-400 to-orange-400 text-white cursor-grab active:cursor-grabbing"
+          wf-onpointerdown="post('desktop.startDrag', this.winId, event)"
+        >
+          <div
+            class="size-6 rounded-md bg-zinc-900/20 flex items-center justify-center text-sm"
+          >
+            <i class="nf nf-md-archive"></i>
+          </div>
+          <div class="flex-1 text-sm font-semibold truncate">
+            Archiver — {{this.s.isNew ? 'New Archive' : '/' + this.s.archivePath}}
+          </div>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', this.winId))"
+            wf-onpointerdown="event.stopPropagation()"
+            title="Minimize"
+            value=""
+          >
+            <i class="nf text-xs nf-cod-chrome_minimize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', this.winId))"
+            wf-onpointerdown="event.stopPropagation()"
+            title="Maximize"
+            value=""
+          >
+            <i class="nf text-xs nf-cod-chrome_maximize"></i>
+          </button>
+          <button
+            class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center max-md:hidden"
+            wf-onclick="(event.stopPropagation(), post('desktop.closeApp', this.winId))"
+            wf-onpointerdown="event.stopPropagation()"
+            title="Close"
+            value=""
+          >
+            <i class="nf nf-md-close text-xs"></i>
+          </button>
+        </div>
+        <div
+          class="flex items-center gap-2 px-3 py-2 border-b border-amber-900 bg-zinc-900/80 flex-wrap gap-y-2"
+        >
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-amber-900 hover:bg-amber-800"
+            wf-onclick="this.post('newArchive')"
+            title="Start a new empty archive"
+            value=""
+          >
+            <i class="nf nf-md-file_plus"></i> New
+          </button>
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-amber-900 hover:bg-amber-800"
+            wf-onclick="this.post('openFromSystem')"
+            value=""
+          >
+            <i class="nf nf-md-folder_open"></i> Open…
+          </button>
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-amber-900 hover:bg-amber-800"
+            wf-onclick="this.post('addFromSystem')"
+            title="Add a file (or drop files and folders from Explorer)"
+            value=""
+          >
+            <i class="nf nf-md-plus"></i> Add…
+          </button>
+          <div class="w-px h-5 bg-amber-800"></div>
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-red-900 hover:bg-red-800 text-red-300"
+            wf-onclick="this.post('removeSelected')"
+            value=""
+          >
+            <i class="nf nf-md-minus"></i> Remove
+          </button>
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-orange-800 hover:bg-orange-700"
+            wf-if="!this.s.isNew"
+            wf-onclick="this.post('extractSelected')"
+            value=""
+          >
+            <i class="nf nf-md-package_up"></i> Extract…
+          </button>
+          <button
+            class="px-2 py-1 rounded-lg text-xs font-semibold bg-orange-700 hover:bg-orange-600 text-orange-50"
+            wf-if="!this.s.isNew"
+            wf-onclick="this.post('extractAll')"
+            value=""
+          >
+            Extract all…
+          </button>
+          <div class="flex-1"></div>
+          <div class="flex items-center gap-1" wf-if="this.s.isNew">
+            <input
+              class="w-36 min-w-0 rounded-lg border border-amber-800 px-2 py-1 text-xs bg-zinc-900"
+              placeholder="archive name"
+              wf-value="this.s.saveName"
+              value=""
+            />
+            <div
+              class="flex rounded-lg overflow-hidden border border-amber-800"
+            >
+              <button
+                class="px-1.5 py-1 text-[10px] font-semibold"
+                wf-map="f of this.s.formats"
+                wf-class="{{this.s.kind === f ? 'bg-amber-500 text-zinc-900' : 'bg-zinc-900 text-amber-200 hover:bg-amber-950'}}"
+                wf-onclick="this.post('setFormat', f)"
+                value=""
+              >
+                .{{f}}
+              </button>
+            </div>
+            <button
+              class="px-2 py-1 rounded-lg text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-white"
+              wf-onclick="this.post('save')"
+              value=""
+            >
+              <i class="nf nf-md-content_save"></i> Save
+            </button>
+          </div>
+        </div>
+        <div
+          class="text-xs text-amber-200 bg-amber-900/80 px-3 py-1.5"
+          wf-if="this.s.warn"
+        >
+          {{this.s.warn}}
+        </div>
+        <div
+          class="text-xs text-red-300 bg-red-950 px-3 py-1.5 font-mono whitespace-pre-wrap"
+          wf-if="this.s.error"
+        >
+          {{this.s.error}}
+        </div>
+        <div
+          class="flex items-center gap-3 px-3 py-1 text-[10px] uppercase tracking-wide text-zinc-500 border-b border-zinc-800"
+        >
+          <button
+            class="hover:text-amber-300"
+            wf-onclick="this.post('selectAll')"
+            value=""
+          >
+            All
+          </button>
+          <button
+            class="hover:text-amber-300"
+            wf-onclick="this.post('selectNone')"
+            value=""
+          >
+            None
+          </button>
+          <div class="flex-1">Name</div>
+          <div class="w-20 text-right">Size</div>
+          <div class="w-24 max-md:hidden">Mode</div>
+        </div>
+        <div
+          class="flex-1 min-h-0 overflow-y-auto p-1 bg-zinc-900/60 relative"
+          wf-ondrop="this.post('drop', event)"
+          wf-ondragleave="this.post('dragLeave', event)"
+          wf-ondragover="this.post('dragOver', event)"
+          wf-ondragenter="this.post('dragEnter', event)"
+        >
+          <div
+            class="pointer-events-none absolute inset-2 z-20 rounded-2xl border-2 border-dashed border-amber-400 bg-amber-900/70 flex flex-col items-center justify-center gap-1 text-amber-200"
+            wf-if="this.s.dragOver"
+          >
+            <i class="nf nf-md-archive_plus text-3xl"></i>
+            <div class="text-sm font-semibold">Drop to add to the archive</div>
+          </div>
+          <div
+            class="absolute inset-0 z-10 flex items-center justify-center bg-zinc-950/60 text-sm text-amber-200 gap-2"
+            wf-if="this.s.busy"
+          >
+            <i class="nf nf-md-loading animate-spin"></i>{{this.s.busy}}
+          </div>
+          <div
+            class="h-full flex flex-col items-center justify-center gap-2 text-zinc-400 text-center px-6"
+            wf-if="!this.s.entries.length &amp;&amp; !this.s.busy"
+          >
+            <i class="nf nf-md-archive_outline text-5xl text-amber-300"></i>
+            <div class="text-sm font-semibold text-zinc-500">
+              {{this.s.isNew ? 'New Archive' : 'Nothing listed'}}
+            </div>
+            <div class="text-xs">
+              Drag files or folders here from Explorer, or use Add… — then pick
+              a format and Save.
+            </div>
+          </div>
+          <button
+            class="w-full flex items-center gap-2 px-2 py-1 rounded-lg text-left hover:bg-amber-950 border border-transparent"
+            wf-map="e of this.s.entries"
+            wf-class="{{this.s.selected[e.path] ? 'bg-amber-900 border-amber-700' : ''}}"
+            wf-onclick="this.post('toggleSelect', e.path)"
+            wf-ondblclick="this.post('openEntry', e.path)"
+            value=""
+          >
+            <i
+              class="nf text-base"
+              wf-class="{{this.s.selected[e.path] ? 'nf-md-checkbox_marked_outline text-amber-400' : 'nf-md-checkbox_blank_outline text-zinc-500'}}"
+            ></i>
+            <i
+              class="nf text-base"
+              wf-class="{{e.isDir ? 'nf-md-folder text-amber-400' : 'nf-md-file_document text-sky-400'}}"
+            ></i>
+            <div class="flex-1 min-w-0 truncate text-sm">
+              <span class="text-zinc-500">{{e.dir ? e.dir + '/' : ''}}</span
+              >{{e.name}}<span
+                class="ml-2 text-[10px] text-emerald-400"
+                wf-if="e.staged"
+                >new</span
+              >
+            </div>
+            <div class="w-20 text-right text-xs text-zinc-400 tabular-nums">
+              {{e.isDir ? '' : (e.size &lt; 1024 ? e.size + ' B' : (e.size / 1024).toFixed(1) + ' KiB')}}
+            </div>
+            <div class="w-24 text-[10px] font-mono text-zinc-500 max-md:hidden">
+              {{e.mode}}
+            </div>
+          </button>
+        </div>
+        <div
+          class="h-6 shrink-0 px-3 flex items-center gap-2 text-[10px] text-zinc-500 border-t border-amber-900 bg-zinc-900/70"
+        >
+          <div class="flex-1 truncate">{{this.s.status}}</div>
+          <div
+            class="truncate font-mono text-zinc-600 max-w-[50%]"
+            wf-if="this.s.log.length"
+          >
+            {{this.s.log[this.s.log.length - 1]}}
+          </div>
+        </div>
+        <div
+          class="absolute right-0 bottom-0 size-4 cursor-se-resize max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'se', event)"
+        ></div>
+        <div
+          class="absolute top-10 right-0 bottom-4 w-1.5 cursor-e-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 'e', event)"
+        ></div>
+        <div
+          class="absolute left-0 right-4 bottom-0 h-1.5 cursor-s-resize z-10 max-md:hidden"
+          wf-onpointerdown="post('desktop.startResize', this.winId, 's', event)"
+        ></div>
+      </div>
+    </div>
+  </body>
+</html>

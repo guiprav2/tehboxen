@@ -1,0 +1,1 @@
+{ "listen": "0.0.0.0", "zones": "/etc/named/zones", "recursion": true, "forwarders": ["198.41.0.4"] }

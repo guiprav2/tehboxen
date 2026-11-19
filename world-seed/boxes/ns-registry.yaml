@@ -1,0 +1,6 @@
+# Authoritative registry for every public zone (the world's root/TLD servers in one box).
+image: dns-registry
+hostname: ns.registry.net
+interfaces:
+  - { name: eth0, segment: internet, addr: 198.41.0.4/32, onlink: true }
+dns: [127.0.0.1]

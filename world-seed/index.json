@@ -1,0 +1,88 @@
+{
+ "version": "916263fcc68bf531",
+ "files": [
+  {
+   "path": "README.md",
+   "data": "# /world\n\nThe root computer's description of the world. The desktop page's network\nfabric (other/net/fabric.js) runs exactly what is here; edit, then\n`worldctl apply` (or reload) to rebuild it.\n\n- `net/segments.yaml` — network segments (LANs, `internet`) and latency in ms\n- `net/routers/<id>.yaml` — JS routers: interfaces, routes, NAT, port forwards, DHCP, DNS forwarding, firewall\n- `boxes/<id>.yaml` — machines: image, hostname, interfaces (static `a.b.c.d/nn` or `dhcp`), extra users and files.\n  `local` is the player's own machine (the page itself).\n- `images/<name>/image.yaml` + `rootfs/` — what a new box is provisioned with (`from:` inherits another image)\n- `state/` — DHCP leases and other runtime state the fabric saves\n\nFiles seeded from the repo are kept up to date until you edit them; edited\nfiles are yours. Put world-specific networks, servers and users here (or in a\nworld pack), never in host JS.\n"
+  },
+  {
+   "path": "boxes/local.yaml",
+   "data": "# The player's own machine (runs on the desktop page itself).\nhostname: tehboxen\ninterfaces:\n  - { name: eth0, segment: home, addr: dhcp }\n"
+  },
+  {
+   "path": "boxes/ns-registry.yaml",
+   "data": "# Authoritative registry for every public zone (the world's root/TLD servers in one box).\nimage: dns-registry\nhostname: ns.registry.net\ninterfaces:\n  - { name: eth0, segment: internet, addr: 198.41.0.4/32, onlink: true }\ndns: [127.0.0.1]\n"
+  },
+  {
+   "path": "boxes/resolver-1.yaml",
+   "data": "# Public recursive resolver.\nimage: dns-resolver\nhostname: resolver1.public-dns.net\ninterfaces:\n  - { name: eth0, segment: internet, addr: 8.8.8.8/32, onlink: true }\ndns: [127.0.0.1]\n"
+  },
+  {
+   "path": "boxes/resolver-2.yaml",
+   "data": "# Public recursive resolver.\nimage: dns-resolver\nhostname: resolver2.public-dns.net\ninterfaces:\n  - { name: eth0, segment: internet, addr: 1.1.1.1/32, onlink: true }\ndns: [127.0.0.1]\n"
+  },
+  {
+   "path": "boxes/resolver-3.yaml",
+   "data": "# Public recursive resolver.\nimage: dns-resolver\nhostname: resolver3.public-dns.net\ninterfaces:\n  - { name: eth0, segment: internet, addr: 9.9.9.9/32, onlink: true }\ndns: [127.0.0.1]\n"
+  },
+  {
+   "path": "images/base/image.yaml",
+   "data": "# Minimal server: root, /etc/rc running /etc/rc.d/* at boot.\nversion: 1\npackages: []\nusers:\n  - { name: root, uid: 0, gid: 0, home: /root, shell: /bin/sh }\nmodes:\n  /etc/rc: \"755\"\n"
+  },
+  {
+   "path": "images/base/rootfs/etc/motd",
+   "data": "\nThe programs included with this system are free software.\nUnauthorized access to this system is prohibited.\n\n"
+  },
+  {
+   "path": "images/base/rootfs/etc/rc",
+   "mode": "755",
+   "data": "#!/bin/sh\n# Run by the kernel at boot, as root: starts every executable in /etc/rc.d.\nfor s in /etc/rc.d/*; do\n  if [ -x \"$s\" ]; then\n    \"$s\" start\n  fi\ndone\n"
+  },
+  {
+   "path": "images/dns/image.yaml",
+   "data": "# DNS server: the interim node `named` (until dnsmasq is ported).\nfrom: base\nversion: 1\npackages: [nodejs]\nmodes:\n  /usr/sbin/named: \"755\"\n  /etc/rc.d/named: \"755\"\n"
+  },
+  {
+   "path": "images/dns/rootfs/etc/rc.d/named",
+   "mode": "755",
+   "data": "#!/bin/sh\n# named: authoritative zones from /etc/named/zones, recursion through forwarders (/etc/named.json).\nnode /usr/sbin/named /etc/named.json >> /var/log/named.log 2>&1 &\n"
+  },
+  {
+   "path": "images/dns/rootfs/usr/sbin/named",
+   "mode": "755",
+   "data": "#!/usr/bin/env node\n// named: a small DNS server (interim, until dnsmasq is ported).\n//   node /usr/sbin/named /etc/named.json\n// Config: { \"listen\": \"0.0.0.0\", \"port\": 53, \"zones\": \"/etc/named/zones\",\n//           \"recursion\": false, \"forwarders\": [\"198.41.0.4\"] }\n// Zones are BIND-style files named <origin>.zone; they're re-read when changed.\n// Authoritative answers (with NS referrals for delegated subzones) for its\n// zones; with recursion on, everything else is forwarded and cached.\n'use strict';\nconst dgram = require('dgram');\nconst fs = require('fs');\nconst path = require('path');\n\nconst conf = JSON.parse(fs.readFileSync(process.argv[2] || '/etc/named.json', 'utf8'));\nconst T = { A: 1, NS: 2, CNAME: 5, SOA: 6, PTR: 12, MX: 15, TXT: 16, AAAA: 28, SRV: 33, ANY: 255 };\nconst norm = (n) => String(n || '').toLowerCase().replace(/\\.+$/, '');\nconst log = (...a) => console.log(new Date().toISOString(), ...a);\n\n/* ---------- wire format ---------- */\nfunction readName(b, off) {\n  let labels = [], jumped = false, end = off;\n  for (let g = 0; g < 128; g++) {\n    let len = b[off];\n    if (len === 0) { if (!jumped) end = off + 1; break; }\n    if ((len & 0xc0) === 0xc0) { if (!jumped) end = off + 2; off = ((len & 0x3f) << 8) | b[off + 1]; jumped = true; continue; }\n    labels.push(b.toString('utf8', off + 1, off + 1 + len));\n    off += 1 + len;\n  }\n  return { name: labels.join('.'), next: end };\n}\nfunction decode(b) {\n  let flags = b.readUInt16BE(2);\n  let m = { id: b.readUInt16BE(0), qr: !!(flags & 0x8000), rd: !!(flags & 0x100), opcode: (flags >> 11) & 15, questions: [] };\n  let off = 12;\n  for (let i = 0, n = b.readUInt16BE(4); i < n; i++) {\n    let { name, next } = readName(b, off);\n    m.questions.push({ name, type: b.readUInt16BE(next), cls: b.readUInt16BE(next + 2) });\n    off = next + 4;\n  }\n  return m;\n}\nfunction nameBytes(n) {\n  let parts = [];\n  for (let l of norm(n).split('.').filter(Boolean)) { let s = Buffer.from(l); parts.push(Buffer.from([s.length]), s); }\n  parts.push(Buffer.from([0]));\n  return Buffer.concat(parts);\n}\nfunction rdata(r) {\n  let d = r.data;\n  switch (r.type) {\n    case T.A: return Buffer.from(d.split('.').map(Number));\n    case T.NS: case T.CNAME: case T.PTR: return nameBytes(d);\n    case T.MX: { let p = Buffer.alloc(2); p.writeUInt16BE(d.preference); return Buffer.concat([p, nameBytes(d.exchange)]); }\n    case T.TXT: return Buffer.concat(d.map((s) => { let x = Buffer.from(s).subarray(0, 255); return Buffer.concat([Buffer.from([x.length]), x]); }));\n    case T.SOA: { let n = Buffer.alloc(20); ['serial', 'refresh', 'retry', 'expire', 'minimum'].forEach((k, i) => n.writeUInt32BE(d[k] >>> 0, i * 4)); return Buffer.concat([nameBytes(d.mname), nameBytes(d.rname), n]); }\n    case T.SRV: { let h = Buffer.alloc(6); h.writeUInt16BE(d.priority, 0); h.writeUInt16BE(d.weight, 2); h.writeUInt16BE(d.port, 4); return Buffer.concat([h, nameBytes(d.target)]); }\n  }\n  return Buffer.alloc(0);\n}\nfunction encode(q, { rcode = 0, aa = false, ra = false, answers = [], authorities = [], additionals = [] }) {\n  let h = Buffer.alloc(12);\n  h.writeUInt16BE(q.id, 0);\n  h.writeUInt16BE(0x8000 | (aa ? 0x400 : 0) | (q.rd ? 0x100 : 0) | (ra ? 0x80 : 0) | rcode, 2);\n  h.writeUInt16BE(q.questions.length, 4);\n  h.writeUInt16BE(answers.length, 6);\n  h.writeUInt16BE(authorities.length, 8);\n  h.writeUInt16BE(additionals.length, 10);\n  let parts = [h];\n  for (let x of q.questions) { let t = Buffer.alloc(4); t.writeUInt16BE(x.type, 0); t.writeUInt16BE(x.cls || 1, 2); parts.push(nameBytes(x.name), t); }\n  for (let r of [...answers, ...authorities, ...additionals]) {\n    let rd = rdata(r);\n    let t = Buffer.alloc(10);\n    t.writeUInt16BE(r.type, 0); t.writeUInt16BE(1, 2); t.writeUInt32BE(r.ttl >>> 0, 4); t.writeUInt16BE(rd.length, 8);\n    parts.push(nameBytes(r.name), t, rd);\n  }\n  return Buffer.concat(parts);\n}\n\n/* ---------- zones ---------- */\nlet zones = new Map(); // origin → { records, soa }\nlet zonesStamp = '';\nfunction parseZone(text, origin) {\n  let ttl = 3600, records = [], last = origin, buf = '', depth = 0, lines = [];\n  for (let raw of text.split('\\n')) {\n    let line = raw.replace(/;.*$/, '');\n    for (let ch of line) depth += ch === '(' ? 1 : ch === ')' ? -1 : 0;\n    buf += ' ' + line.replace(/[()]/g, ' ');\n    if (depth <= 0) { lines.push({ text: buf, indented: /^\\s/.test(raw) && buf.trim() !== '' }); buf = ''; depth = 0; }\n  }\n  let abs = (n) => (n === '@' ? origin : n.endsWith('.') ? norm(n) : norm(`${n}.${origin}`));\n  for (let { text: l, indented } of lines) {\n    let w = l.match(/\"(?:[^\"\\\\]|\\\\.)*\"|\\S+/g);\n    if (!w) continue;\n    if (w[0] === '$ORIGIN') { origin = norm(w[1]); continue; }\n    if (w[0] === '$TTL') { ttl = Number(w[1]) || ttl; continue; }\n    let name = last;\n    if (!indented) { name = abs(w.shift()); last = name; }\n    let rttl = ttl;\n    while (w.length && (/^\\d+$/.test(w[0]) || w[0] === 'IN')) { let x = w.shift(); if (x !== 'IN') rttl = Number(x); }\n    let type = String(w.shift() || '').toUpperCase();\n    let data;\n    switch (type) {\n      case 'A': data = w[0]; break;\n      case 'NS': case 'CNAME': case 'PTR': data = abs(w[0]); break;\n      case 'MX': data = { preference: Number(w[0]), exchange: abs(w[1]) }; break;\n      case 'TXT': data = w.map((x) => (x.startsWith('\"') ? JSON.parse(x) : x)); break;\n      case 'SOA': data = { mname: abs(w[0]), rname: abs(w[1]), serial: +w[2], refresh: +w[3], retry: +w[4], expire: +w[5], minimum: +w[6] }; break;\n      case 'SRV': data = { priority: +w[0], weight: +w[1], port: +w[2], target: abs(w[3]) }; break;\n      default: continue;\n    }\n    records.push({ name, type: T[type], ttl: rttl, data });\n  }\n  return { records, soa: records.find((r) => r.type === T.SOA) };\n}\nfunction loadZones() {\n  let dir = conf.zones || '/etc/named/zones';\n  let files = [];\n  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.zone')).sort(); } catch {}\n  let stamp = files.map((f) => { try { return f + ':' + fs.statSync(path.join(dir, f)).mtimeMs; } catch { return f; } }).join('|');\n  if (stamp === zonesStamp) return;\n  zonesStamp = stamp;\n  let next = new Map();\n  for (let f of files) {\n    let origin = norm(f.slice(0, -5));\n    try { next.set(origin, parseZone(fs.readFileSync(path.join(dir, f), 'utf8'), origin)); }\n    catch (err) { log(`zone ${f}: ${err.message}`); }\n  }\n  zones = next;\n  log(`loaded ${zones.size} zone(s): ${[...zones.keys()].join(', ') || '-'}`);\n}\n\n/** The zone that owns a name (longest origin suffix). */\nfunction zoneFor(name) {\n  let best = null;\n  for (let o of zones.keys()) if ((name === o || name.endsWith('.' + o)) && (!best || o.length > best.length)) best = o;\n  return best;\n}\n\nfunction authoritative(q) {\n  let { name, type } = q.questions[0];\n  name = norm(name);\n  let origin = zoneFor(name);\n  if (origin == null) return null;\n  let z = zones.get(origin);\n  // Delegation: NS records for a name between the query and the apex.\n  for (let cut = name; cut !== origin && cut.includes('.'); cut = cut.slice(cut.indexOf('.') + 1)) {\n    let ns = z.records.filter((r) => r.name === cut && r.type === T.NS);\n    if (ns.length && cut !== origin) {\n      let glue = z.records.filter((r) => r.type === T.A && ns.some((n) => n.data === r.name));\n      return { authorities: ns, additionals: glue };\n    }\n  }\n  let answers = [];\n  let target = name;\n  for (let hops = 0; hops < 8; hops++) {\n    let here = z.records.filter((r) => r.name === target);\n    let cname = here.find((r) => r.type === T.CNAME);\n    if (cname && type !== T.CNAME) {\n      answers.push(cname);\n      target = norm(cname.data);\n      if (zoneFor(target) !== origin) break;\n      continue;\n    }\n    answers.push(...here.filter((r) => type === T.ANY || r.type === type));\n    if (!here.length && !answers.length) return { aa: true, rcode: 3, authorities: z.soa ? [z.soa] : [] };\n    break;\n  }\n  return { aa: true, answers, authorities: answers.length ? [] : z.soa ? [z.soa] : [] };\n}\n\n/* ---------- forwarding ---------- */\nlet cache = new Map();\nfunction forward(msg, q) {\n  let key = q.questions.map((x) => `${norm(x.name)}/${x.type}`).join(' ');\n  let hit = cache.get(key);\n  if (hit && hit.expires > Date.now()) {\n    let b = Buffer.from(hit.bytes);\n    b.writeUInt16BE(q.id, 0);\n    return Promise.resolve(b);\n  }\n  return new Promise((resolve) => {\n    let ups = [...(conf.forwarders || [])];\n    let sock = dgram.createSocket('udp4');\n    let timer = null;\n    let tryNext = () => {\n      let ns = ups.shift();\n      if (!ns) { sock.close(); return resolve(null); }\n      sock.send(msg, 53, ns);\n      timer = setTimeout(tryNext, 3000);\n    };\n    sock.on('message', (res) => {\n      clearTimeout(timer);\n      sock.close();\n      let rcode = res.readUInt16BE(2) & 15;\n      if (rcode === 0 || rcode === 3) cache.set(key, { bytes: Buffer.from(res), expires: Date.now() + (rcode === 3 ? 60e3 : 300e3) });\n      resolve(res);\n    });\n    sock.on('error', () => tryNext());\n    tryNext();\n  });\n}\n\n/* ---------- server ---------- */\nconst server = dgram.createSocket('udp4');\nserver.on('message', async (msg, rinfo) => {\n  let q;\n  try { q = decode(msg); } catch { return; }\n  if (q.qr || !q.questions.length) return;\n  loadZones();\n  let qd = q.questions[0];\n  let res = authoritative(q);\n  let out;\n  if (res) out = encode(q, { ...res, ra: !!conf.recursion });\n  else if (conf.recursion && q.rd) {\n    let fwd = await forward(msg, q);\n    out = fwd || encode(q, { rcode: 2, ra: true });\n  } else out = encode(q, { rcode: 5 });\n  log(`${rinfo.address}#${rinfo.port} ${norm(qd.name)} ${Object.keys(T).find((k) => T[k] === qd.type) || qd.type} -> rcode ${out.readUInt16BE(2) & 15}`);\n  server.send(out, rinfo.port, rinfo.address);\n});\nserver.on('listening', () => log(`named listening on ${conf.listen || '0.0.0.0'}:${conf.port || 53} (recursion ${conf.recursion ? 'on' : 'off'})`));\nserver.on('error', (err) => { log(`error: ${err.message}`); process.exit(1); });\nloadZones();\nserver.bind(conf.port || 53, conf.listen || '0.0.0.0');\n"
+  },
+  {
+   "path": "images/dns-registry/image.yaml",
+   "data": "# Authoritative for every zone in /etc/named/zones (BIND zone files, origin = file name).\nfrom: dns\nversion: 1\n"
+  },
+  {
+   "path": "images/dns-registry/rootfs/etc/named/zones/public-dns.net.zone",
+   "data": "$ORIGIN public-dns.net.\n$TTL 3600\n@         IN SOA ns.registry.net. hostmaster.registry.net. 1 7200 3600 1209600 300\n@         IN NS  ns.registry.net.\nresolver1 IN A   8.8.8.8\nresolver2 IN A   1.1.1.1\nresolver3 IN A   9.9.9.9\n"
+  },
+  {
+   "path": "images/dns-registry/rootfs/etc/named/zones/registry.net.zone",
+   "data": "$ORIGIN registry.net.\n$TTL 3600\n@         IN SOA ns.registry.net. hostmaster.registry.net. 1 7200 3600 1209600 300\n@         IN NS  ns.registry.net.\nns        IN A   198.41.0.4\n"
+  },
+  {
+   "path": "images/dns-registry/rootfs/etc/named.json",
+   "data": "{ \"listen\": \"0.0.0.0\", \"zones\": \"/etc/named/zones\", \"recursion\": false }\n"
+  },
+  {
+   "path": "images/dns-resolver/image.yaml",
+   "data": "# Recursive resolver: answers from cache, asks the registry for the rest.\nfrom: dns\nversion: 1\n"
+  },
+  {
+   "path": "images/dns-resolver/rootfs/etc/named.json",
+   "data": "{ \"listen\": \"0.0.0.0\", \"zones\": \"/etc/named/zones\", \"recursion\": true, \"forwarders\": [\"198.41.0.4\"] }\n"
+  },
+  {
+   "path": "net/routers/home-router.yaml",
+   "data": "# The player's home router: NAT to the Internet, DHCP and a DNS forwarder on the LAN.\nhostname: home-router\ninterfaces:\n  - { name: wan, segment: internet, addr: 73.42.18.9/32 }\n  - { name: lan, segment: home, addr: 192.168.1.1/24 }\nroutes:\n  - { to: default, dev: wan }\nmasquerade: [wan]\nforwards: []\ndhcp:\n  iface: lan\n  range: 192.168.1.100-192.168.1.199\n  dns: [192.168.1.1]\n  domain: lan\n  lease: 86400\ndns:\n  listen: lan\n  forwarders: [8.8.8.8, 1.1.1.1]\n"
+  },
+  {
+   "path": "net/segments.yaml",
+   "data": "# Network segments: every interface plugs into one. Latency is one-way, in ms.\ninternet:\n  latency: 12\nhome:\n  latency: 0\n"
+  }
+ ]
+}

@@ -345,7 +345,7 @@ export default class Mail {
 
   /**
    * First-run OS seed only. World cast mail lives in VFS packs.
-   * Seeds a welcome from Grok explaining world-building vs Danger Zone import.
+   * Seeds a welcome from God's Hand explaining world-building vs Danger Zone import.
    */
   async _gecos() {
     let u = await vfs.getUser(PLAYER).catch(() => null);
@@ -357,7 +357,7 @@ export default class Mail {
     await writeYaml(ROOT + '/profile.yaml', { name: await this._gecos(), address: PLAYER + '@boxmail.net' });
     let inbox = [
       {
-        from: 'Grok <grok@tehboxen.net>',
+        from: "God's Hand <godshand@tehboxen.net>",
         subject: 'Welcome to Tehboxen — build or import a world',
         date: ago(1),
         body:
@@ -367,7 +367,7 @@ export default class Mail {
           '1) Message me on Relay (or reply here) and we will invent a crew, hideouts and vulnerable targets together before you play.\n' +
           '2) Open Danger Zone and Import a world pack you downloaded from the internet.\n\n' +
           'Factory reset wipes to this empty OS again; re-import a pack to restore a cast.\n\n' +
-          '— Grok',
+          "— God's Hand",
       },
     ];
     let i = 0;

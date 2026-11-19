@@ -13,6 +13,8 @@
  */
 import * as vfs from '../vfs.js';
 import { resolveLinkTarget } from '../vfs.js';
+import { hostname as netHostname, currentStack } from '../net/local.js';
+import { procNetFiles } from '../net/procfs.js';
 
 let enc = new TextEncoder();
 
@@ -246,11 +248,13 @@ export function createHost(o) {
       let shadow = await vfs.readShadow();
       return Object.values(users).map((u) => `${u.name}:${shadow[u.name] || (u.human ? '!' : '*')}:19700:0:99999:7:::`).join('\n') + '\n';
     } },
-    'etc/hostname': { mode: 0o644, uid: 0, gid: 0, text: async () => (o.hostname || 'tehboxen') + '\n' },
+    'etc/hostname': { mode: 0o644, uid: 0, gid: 0, text: async () => netHostname() + '\n' },
     'etc/os-release': { mode: 0o644, uid: 0, gid: 0, text: async () => 'NAME="Tehboxen"\nID=tehboxen\nPRETTY_NAME="Tehboxen (simulated)"\nVERSION_ID="1"\n' },
   };
+  // /proc/net/*: the kernel's network tables in Linux's text formats (libdnet, nmap, busybox).
+  for (let name of ['route', 'arp', 'dev', 'tcp', 'udp']) virtual['proc/net/' + name] = { mode: 0o444, uid: 0, gid: 0, text: async () => procNetFiles(currentStack())[name] || '' };
   let devices = new Set(['dev/null', 'dev/zero', 'dev/random', 'dev/urandom', 'dev/tty', 'dev/stdin', 'dev/stdout', 'dev/stderr']);
-  let virtualDirs = new Set(['etc', 'dev', 'tmp', 'proc']);
+  let virtualDirs = new Set(['etc', 'dev', 'tmp', 'proc', 'proc/net']);
 
   async function kindOf(key) {
     if (key === '') return 'dir';
@@ -572,8 +576,8 @@ export function createHost(o) {
       return true;
     },
 
-    async chown({ path, uid, gid }) {
-      let key = await realKey(keyOf(path), 'chown', path);
+    async chown({ path, uid, gid, follow = true }) {
+      let key = await realKey(keyOf(path), 'chown', path, !follow);
       if (!(await kindOf(key))) throw sysError('ENOENT', 'chown', path);
       if (!isRoot) throw sysError('EPERM', 'chown', path);
       let st = (await statOf(key)) || {};

@@ -144,6 +144,9 @@ export default class DangerZone {
         // Host JS no longer embeds a demo cast. Reset leaves the empty OS
         // seed from vfs.factoryReset; restore world via Import pack.
         await factoryReset();
+        // The rest of the world too: root computer (/world) and every box.
+        let { wipeWorld } = await import('../other/net/boot.js');
+        await wipeWorld();
         // Accounts are gone with the VFS: drop the login too and start over at the login screen.
         let { clearSession, hardNavigate } = await import('../other/session.js');
         clearSession();

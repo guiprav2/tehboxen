@@ -1,0 +1,7 @@
+#!/bin/sh
+# Run by the kernel at boot, as root: starts every executable in /etc/rc.d.
+for s in /etc/rc.d/*; do
+  if [ -x "$s" ]; then
+    "$s" start
+  fi
+done

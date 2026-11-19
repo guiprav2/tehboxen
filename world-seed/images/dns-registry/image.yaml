@@ -1,0 +1,3 @@
+# Authoritative for every zone in /etc/named/zones (BIND zone files, origin = file name).
+from: dns
+version: 1

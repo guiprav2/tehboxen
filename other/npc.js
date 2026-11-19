@@ -30,7 +30,7 @@ export async function provisionNpc(opts = {}) {
   await vfs.ensureReady();
   let id = slugify(opts.id);
   if (!id) throw new Error('provisionNpc: id required');
-  if (id === 'root' || id === 'nobody' || id === 'grok') {
+  if (id === 'root' || id === 'nobody' || id === 'godshand') {
     throw new Error('provisionNpc: reserved id ' + id);
   }
   if (await getUser(id)) throw new Error('provisionNpc: user exists: ' + id);
@@ -137,6 +137,6 @@ export async function listNpcs() {
   let users = await listUsers();
   return Object.values(users).filter(
     (u) =>
-      !['root', 'nobody', 'grok'].includes(u.name) && !u.human && Number(u.uid) >= 1001,
+      !['root', 'nobody', 'godshand'].includes(u.name) && !u.human && Number(u.uid) >= 1001,
   );
 }

@@ -12,6 +12,7 @@
 import { createHost } from './host.js';
 import { serveWorker, SAB_SIZE } from './channel.js';
 import { spawnModuleWorker } from './spawn-worker.js';
+import { createProcNet } from '../net/procnet.js';
 
 let enc = new TextEncoder();
 let dec = new TextDecoder();
@@ -98,6 +99,9 @@ function takeWorker() {
   return w;
 }
 
+/** Daemonized processes of this box (pid → { name, kill }). */
+export let daemons = new Map();
+
 let notIsolated = (name) => `${name}: this page is not cross-origin isolated, so programs can't run here yet.
   Reload the page (Safari/iOS: isolation comes from a service worker, set up on first load).
   In Webfoundry: Settings → Hardened isolation.
@@ -130,8 +134,18 @@ export async function runNode(argv, ctx) {
   let errChunks = [];
   let outDec = new TextDecoder();
   let errDec = new TextDecoder();
-  let onOut = (b) => (ctx.live ? ctx.live.out(outDec.decode(b, { stream: true })) : outChunks.push(b));
-  let onErr = (b) => (ctx.live ? ctx.live.err(errDec.decode(b, { stream: true })) : errChunks.push(b));
+  // Sinks that take bytes (redirected files) get them untouched; terminals get text.
+  let onOut = (b) => (ctx.live?.outBytes ? ctx.live.outBytes(b) : ctx.live ? ctx.live.out(outDec.decode(b, { stream: true })) : outChunks.push(b));
+  let onErr = (b) => (ctx.live?.errBytes ? ctx.live.errBytes(b) : ctx.live ? ctx.live.err(errDec.decode(b, { stream: true })) : errChunks.push(b));
+  let concat = (chunks) => {
+    let all = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
+    let o = 0;
+    for (let c of chunks) {
+      all.set(c, o);
+      o += c.length;
+    }
+    return all;
+  };
   let join = (chunks) => {
     let all = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
     let o = 0;
@@ -148,8 +162,16 @@ export async function runNode(argv, ctx) {
   // On a terminal with nothing piped in, stdin is the terminal: tty* syscalls go to it (other/bash.js).
   let tty = ctx.live?.tty?.attachProcess && ctx.stdin == null ? ctx.live.tty : null;
   let ttySession = tty?.attachProcess?.() || null;
+  // Sockets live in this box's network stack, per process (closed at exit).
+  let procNet = createProcNet({ actor: ctx.actor, pid: ctx.pid, comm: ctx.name || ctx.tool?.name || (argv.find((a) => !a.startsWith('-')) || 'node').split('/').pop(), push: (m) => worker?.postMessage(m, m.data instanceof Uint8Array ? [m.data.buffer] : []) });
+  let detachHook = null;
   let served = {
     call(op, args) {
+      if (op.startsWith('net.')) return procNet.call(op, args);
+      if (op === 'proc.detach') {
+        detachHook?.();
+        return Promise.resolve(0);
+      }
       if (!op.startsWith('tty')) return host.call(op, args);
       if (!ttySession) return Promise.reject({ __syserr: true, code: 'ENOTTY', errno: -25, syscall: op, message: 'ENOTTY: inappropriate ioctl for device' });
       if (op === 'ttyRead') return ttySession.read(args.max || 4096);
@@ -170,13 +192,31 @@ export async function runNode(argv, ctx) {
 
   return new Promise((resolve) => {
     let done = false;
+    let detached = false;
     let watches = new Map();
+    // Daemonized (tehboxen_detach): the caller gets exit 0 now; the process runs on in the
+    // background until it exits or is killed, its output dropped.
+    detachHook = () => {
+      if (done || detached) return;
+      detached = true;
+      ttySession?.detach();
+      daemons.set(pid, { pid, name: ctx.name || 'node', kill: () => finish(143) });
+      if (ctx.live) {
+        let a = outDec.decode();
+        let b = errDec.decode();
+        if (a) ctx.live.out(a);
+        if (b) ctx.live.err(b);
+      }
+      resolve({ code: 0, stdout: join(outChunks), stderr: join(errChunks) });
+    };
     let finish = (code) => {
       if (done) return;
       done = true;
+      daemons.delete(pid);
       for (let off of watches.values()) off();
       worker.terminate();
       host.dispose();
+      procNet.dispose();
       ttySession?.detach();
       if (ctx.live) {
         let a = outDec.decode();
@@ -184,12 +224,13 @@ export async function runNode(argv, ctx) {
         if (a) ctx.live.out(a);
         if (b) ctx.live.err(b);
       }
-      resolve({ code, stdout: join(outChunks), stderr: join(errChunks) });
+      // stdoutBytes: the exact bytes, for pipes and redirections into other programs and files.
+      if (!detached) resolve({ code, stdout: join(outChunks), stderr: join(errChunks), stdoutBytes: ctx.live ? undefined : concat(outChunks) });
     };
 
     serveWorker(worker, sab, served, (m) => {
-      if (m.t === 'out') onOut(m.b);
-      else if (m.t === 'err') onErr(m.b);
+      if (m.t === 'out') !detached && onOut(m.b);
+      else if (m.t === 'err') !detached && onErr(m.b);
       else if (m.t === 'exit') finish(m.code);
       else if (m.t === 'tool-cache') toolCache = { ...m.assets, sysroots: toolCache?.sysroots };
       else if (m.t === 'tool-cache-sysroot') toolCache = { ...(toolCache || {}), sysroots: { ...(toolCache?.sysroots || {}), [m.key]: m.tgz } };
@@ -213,6 +254,7 @@ export async function runNode(argv, ctx) {
     // Ctrl-C / kill: deliver the signal; if the process doesn't exit in time
     // (busy in synchronous code, or it ignores the signal) terminate it.
     ctx.signal?.addEventListener('abort', () => {
+      if (detached) return; // a daemon no longer belongs to the command line that started it
       let sig = ctx.signal.reason?.signal || 'SIGINT';
       let code = 128 + ({ SIGHUP: 1, SIGINT: 2, SIGKILL: 9, SIGTERM: 15 }[sig] || 2);
       if (sig === 'SIGKILL') return finish(code);
@@ -220,7 +262,7 @@ export async function runNode(argv, ctx) {
       setTimeout(() => finish(code), 1500);
     });
 
-    let stdin = ctx.stdin != null ? enc.encode(ctx.stdin) : new Uint8Array(0);
+    let stdin = ctx.stdin == null ? new Uint8Array(0) : ctx.stdin instanceof Uint8Array ? ctx.stdin : enc.encode(ctx.stdin);
     worker.postMessage({
       t: 'init',
       argv,
@@ -231,7 +273,7 @@ export async function runNode(argv, ctx) {
       stdinPiped: ctx.stdin != null,
       stdinTty: !!ttySession,
       // Output streaming straight to the Terminal = a TTY (like node in a real terminal).
-      tty: ctx.live ? { columns: Number(ctx.live.columns) || 80, rows: Number(ctx.live.rows) || 24 } : null,
+      tty: ctx.live && !ctx.live.notTty ? { columns: Number(ctx.live.columns) || 80, rows: Number(ctx.live.rows) || 24 } : null,
       sab,
       libCache,
       tool: ctx.tool || null,

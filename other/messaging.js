@@ -484,7 +484,7 @@ export let PICTURES = HOME + '/Pictures';
 
 /**
  * Copy OS chrome assets from host media/ into the VFS on first boot.
- * Wallpapers → ~/Pictures/; app-specific files (e.g. Grok avatar) are seeded
+ * Wallpapers → ~/Pictures/; app-specific files (e.g. God's Hand avatar) are seeded
  * by their app. Runtime UI always reads the VFS copies.
  */
 export async function seedOsMedia() {

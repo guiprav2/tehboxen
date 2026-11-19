@@ -3,7 +3,9 @@
  *
  * Files are the real VFS through the blocking syscall channel, with the
  * process user's permissions; preopens map guest directories onto VFS paths
- * and paths can't escape them (ENOTCAPABLE). Open files are buffered in the
+ * and paths can't escape them (ENOTCAPABLE) — unless `sandbox: false` (the shell's
+ * runner for native programs): then ".." climbs out of any directory fd like POSIX,
+ * the user's permissions being the only boundary. Open files are buffered in the
  * worker and written back on close / fd_sync / exit. Sockets are not
  * simulated yet.
  *
@@ -25,6 +27,9 @@ let E = {
   SUCCESS: 0, '2BIG': 1, ACCES: 2, AGAIN: 6, BADF: 8, EXIST: 20, FAULT: 21, FBIG: 22, INVAL: 28, IO: 29, ISDIR: 31,
   LOOP: 32, MFILE: 33, NAMETOOLONG: 37, NOENT: 44, NOSYS: 52, NOTDIR: 54, NOTEMPTY: 55, NOTSUP: 58, NOTTY: 59,
   NOTSOCK: 57, PERM: 63, SPIPE: 70, XDEV: 75, NOTCAPABLE: 76, BUSY: 10,
+  ADDRINUSE: 3, ADDRNOTAVAIL: 4, AFNOSUPPORT: 5, ALREADY: 7, CONNABORTED: 13, CONNREFUSED: 14, CONNRESET: 15, DESTADDRREQ: 17,
+  HOSTUNREACH: 23, INPROGRESS: 26, INTR: 27, ISCONN: 30, MSGSIZE: 35, NETDOWN: 38, NETUNREACH: 40, NOPROTOOPT: 50,
+  NOTCONN: 53, PIPE: 64, PROTONOSUPPORT: 66, PROTOTYPE: 67, TIMEDOUT: 73,
 };
 let FILETYPE = { unknown: 0, block: 1, chr: 2, dir: 3, file: 4, dgram: 5, stream: 6, symlink: 7 };
 let O = { CREAT: 1, DIRECTORY: 2, EXCL: 4, TRUNC: 8 };
@@ -37,7 +42,16 @@ let DIR_RIGHTS = ALL_RIGHTS & ~(RIGHT.FD_READ | RIGHT.FD_WRITE | RIGHT.FD_SEEK |
 let CODE_TO_ERRNO = {
   ENOENT: E.NOENT, EACCES: E.ACCES, EEXIST: E.EXIST, ENOTDIR: E.NOTDIR, EISDIR: E.ISDIR, ENOTEMPTY: E.NOTEMPTY,
   EINVAL: E.INVAL, ELOOP: E.LOOP, EPERM: E.PERM, EXDEV: E.XDEV, EBADF: E.BADF, ENOSYS: E.NOSYS, ERR_FS_EISDIR: E.ISDIR, EBUSY: E.BUSY,
+  EAGAIN: E.AGAIN, EADDRINUSE: E.ADDRINUSE, EADDRNOTAVAIL: E.ADDRNOTAVAIL, EAFNOSUPPORT: E.AFNOSUPPORT, EALREADY: E.ALREADY,
+  ECONNABORTED: E.CONNABORTED, ECONNREFUSED: E.CONNREFUSED, ECONNRESET: E.CONNRESET, EDESTADDRREQ: E.DESTADDRREQ,
+  EHOSTUNREACH: E.HOSTUNREACH, EINPROGRESS: E.INPROGRESS, EISCONN: E.ISCONN, EMSGSIZE: E.MSGSIZE, ENETDOWN: E.NETDOWN,
+  ENETUNREACH: E.NETUNREACH, ENOPROTOOPT: E.NOPROTOOPT, ENOTCONN: E.NOTCONN, EPIPE: E.PIPE, EPROTONOSUPPORT: E.PROTONOSUPPORT,
+  ETIMEDOUT: E.TIMEDOUT, ENOTSOCK: E.NOTSOCK, EOPNOTSUPP: E.NOTSUP, ENOTFOUND: E.NOENT, EAI_AGAIN: E.AGAIN,
 };
+
+/** IPv4 as a host-order u32 (what libtehboxen passes) ↔ dotted string. */
+let u32ToIp = (n) => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+let ipToU32 = (ip) => String(ip).split('.').reduce((n, x) => n * 256 + Number(x), 0) >>> 0;
 
 class WASIError extends Error {
   constructor(errno) {
@@ -90,11 +104,14 @@ export function createWasiModule(ctx) {
       this.fds.set(1, { kind: 'stdio', stdio: 1, rights: ALL_RIGHTS, flags: FDFLAG.APPEND });
       this.fds.set(2, { kind: 'stdio', stdio: 2, rights: ALL_RIGHTS, flags: FDFLAG.APPEND });
       let next = 3;
+      // Capability roots: each directory fd, or the whole VFS when not sandboxed.
+      this.rootOf = options.sandbox === false ? () => '/' : (p) => p;
       for (let [guest, host] of Object.entries(options.preopens || {})) {
         let hostPath = P.resolve(ctx.cwd(), String(host));
-        this.fds.set(next++, { kind: 'dir', path: hostPath, root: hostPath, preopen: String(guest), rights: DIR_RIGHTS, inheriting: ALL_RIGHTS, flags: 0 });
+        this.fds.set(next++, { kind: 'dir', path: hostPath, root: this.rootOf(hostPath), preopen: String(guest), rights: DIR_RIGHTS, inheriting: ALL_RIGHTS, flags: 0 });
       }
       this.stdinPos = 0;
+      this.displaced = new Map(); // preopen fd → its entry, after the program reused the number
       this.open = new Map(); // host path → { data, size, dirty, refs }: fds on one file share it
       this.times = new Map(); // host path (L: prefix = the link itself) → { atim, mtim } in ns
       this.memory = null;
@@ -267,6 +284,22 @@ export function createWasiModule(ctx) {
       return file;
     }
 
+    /** Drop one fd's reference to an open file description (fd_renumber/dup2 onto it). */
+    _closeEntry(f) {
+      if ((f.fdrefs || 1) > 1) {
+        f.fdrefs--;
+        return;
+      }
+      if (f.kind === 'socket') {
+        try {
+          sys.sync('net.close', { sid: f.sid });
+        } catch {}
+        return;
+      }
+      this._release(f);
+      if (f.kind === 'file') sys.sync('unlock', { path: f.path });
+    }
+
     _release(fd) {
       if (!fd?.file) return;
       this._flushFile(fd.file);
@@ -283,6 +316,8 @@ export function createWasiModule(ctx) {
 
     _resolve(dirfd, guestPath, follow) {
       let base = this.fds.get(dirfd);
+      // A preopen the program dup2()ed something else over still serves wasi-libc's path lookups.
+      if ((!base || base.kind !== 'dir') && this.displaced.has(dirfd)) base = this.displaced.get(dirfd);
       if (!base) throw new WASIError(E.BADF);
       if (base.kind !== 'dir') throw new WASIError(E.NOTDIR);
       let rel = String(guestPath);
@@ -317,7 +352,233 @@ export function createWasiModule(ctx) {
      */
     _tehboxenImports() {
       let self = this;
+      let enc8 = new TextEncoder();
+      let dec8 = new TextDecoder();
+      // Socket calls return a WASI errno (0 = ok), like the wasi_snapshot_preview1 imports.
+      let sockWrap = (fn) =>
+        function (...a) {
+          try {
+            return fn(self._sock, ...a) ?? 0;
+          } catch (err) {
+            if (err instanceof WASIError) return err.errno;
+            if (err instanceof WASIExit || err?.name === 'ProcessExit') throw err;
+            if (err instanceof RangeError) return E.FAULT;
+            throw err;
+          }
+        };
+      let SOCKOPT = { 1: 'reuse', 2: 'broadcast', 4: 'device', 5: 'keepalive', 6: 'nodelay', 7: 'ttl', 8: 'hdrincl' };
       return {
+        /* ----- BSD sockets (libtehboxen socket.c) ----- */
+        sock_open: sockWrap((k, type, outFdPtr) => {
+          let kind = type === 3 ? 'raw' : type === 5 || type === 2 ? 'udp' : 'tcp';
+          let sid = k.net('socket', { type: kind });
+          // Raw sockets read like UDP: peer-prefixed datagrams.
+          k.view().setUint32(outFdPtr, k.newSockFd(sid, kind === 'raw' ? 'udp' : kind), true);
+        }),
+        /** socket(domain, type, protocol) for raw IP (1, 3, proto) and AF_PACKET (17, 3|5, ethertype). */
+        sock_open2: sockWrap((k, domain, type, proto, outFdPtr) => {
+          let sid;
+          let kind;
+          if (domain === 17) {
+            sid = k.net('socket', { type: 'packet', cooked: type === 5 || type === 2, ethertype: proto || 0x0003 });
+            kind = 'packet';
+          } else {
+            let name = { 1: 'icmp', 6: 'tcp', 17: 'udp', 255: 'raw' }[proto];
+            if (!name) return E.PROTONOSUPPORT;
+            sid = k.net('socket', { type: 'raw', proto: name });
+            kind = 'udp'; // reads like UDP: peer-prefixed datagrams
+          }
+          k.view().setUint32(outFdPtr, k.newSockFd(sid, kind), true);
+        }),
+        sock_bind_ll: sockWrap((k, fd, ifindex, ethertype) => {
+          k.net('bind', { sid: k.sockOf(fd).sid, ifindex, ethertype });
+        }),
+        /** recvfrom on a packet socket: the frame, plus sockaddr_ll fields (20 bytes at llPtr). */
+        sock_recv_ll: sockWrap((k, fd, buf, len, flags, llPtr, outPtr) => {
+          let f = k.sockOf(fd);
+          let from = {};
+          let n = k.sockRecv(f, [[buf, len]], false, from);
+          let v = k.view();
+          v.setUint32(outPtr, n, true);
+          if (llPtr && from.ll) {
+            let ll = new DataView(from.ll.buffer, from.ll.byteOffset, 16);
+            let b = k.bytes();
+            v.setUint16(llPtr, 17, true); // sll_family
+            v.setUint16(llPtr + 2, ((ll.getUint16(4) & 0xff) << 8) | (ll.getUint16(4) >> 8), true); // sll_protocol (network order)
+            v.setInt32(llPtr + 4, ll.getUint32(0), true); // sll_ifindex
+            v.setUint16(llPtr + 8, ll.getUint32(0) === 1 ? 772 : 1, true); // sll_hatype
+            b[llPtr + 10] = from.ll[6]; // sll_pkttype
+            b[llPtr + 11] = 6; // sll_halen
+            b.set(from.ll.subarray(8, 14), llPtr + 12);
+            b[llPtr + 18] = b[llPtr + 19] = 0;
+          }
+          void flags;
+        }),
+        sock_send_ll: sockWrap((k, fd, buf, len, ifindex, ethertype, macPtr, outPtr) => {
+          let f = k.sockOf(fd);
+          let data = k.bytes().slice(buf, buf + len);
+          let mac = macPtr ? [...k.bytes().slice(macPtr, macPtr + 6)].map((x) => x.toString(16).padStart(2, '0')).join(':') : undefined;
+          let n = k.net('send', { sid: f.sid, data, ifindex, ethertype, mac });
+          k.view().setUint32(outPtr, n, true);
+        }),
+        sock_bind: sockWrap((k, fd, ip, port) => {
+          let f = k.sockOf(fd);
+          let r = k.net('bind', { sid: f.sid, addr: u32ToIp(ip >>> 0), port });
+          if (r && f.type === 'udp') f.bound = true;
+        }),
+        sock_listen: sockWrap((k, fd, backlog) => {
+          k.net('listen', { sid: k.sockOf(fd).sid, backlog: backlog > 0 ? backlog : 128 });
+        }),
+        sock_connect: sockWrap((k, fd, ip, port) => {
+          let f = k.sockOf(fd);
+          k.net('connect', { sid: f.sid, addr: u32ToIp(ip >>> 0), port, nonblock: !!((f.flags || 0) & 4) });
+        }),
+        sock_name: sockWrap((k, fd, peer, ipPtr, portPtr) => {
+          let f = k.sockOf(fd);
+          let a = k.net(peer ? 'getpeername' : 'getsockname', { sid: f.sid });
+          let v = k.view();
+          v.setUint32(ipPtr, ipToU32(a.addr || '0.0.0.0'), true);
+          v.setUint32(portPtr, Number(a.port) || 0, true);
+        }),
+        sock_sendto: sockWrap((k, fd, buf, len, ip, port, outPtr) => {
+          let f = k.sockOf(fd);
+          let data = k.bytes().slice(buf, buf + len);
+          let n = k.net('send', { sid: f.sid, data, ...(port >= 0 ? { addr: u32ToIp(ip >>> 0), port } : {}) });
+          k.view().setUint32(outPtr, n, true);
+        }),
+        sock_recvfrom: sockWrap((k, fd, buf, len, flags, ipPtr, portPtr, outPtr) => {
+          let f = k.sockOf(fd);
+          let from = {};
+          let n = k.sockRecv(f, [[buf, len]], false, from);
+          let v = k.view();
+          v.setUint32(outPtr, n, true);
+          if (ipPtr) v.setUint32(ipPtr, from.ip != null ? from.ip >>> 0 : f.peer ? ipToU32(f.peer.addr) : 0, true);
+          if (portPtr) v.setUint32(portPtr, from.port ?? f.peer?.port ?? 0, true);
+          void flags;
+        }),
+        sock_setopt: sockWrap((k, fd, opt, value, strPtr, strLen) => {
+          let f = k.sockOf(fd);
+          let name = SOCKOPT[opt];
+          if (!name) return;
+          let v = name === 'device' ? dec8.decode(k.bytes().slice(strPtr, strPtr + strLen)).replace(/\0.*$/, '') : value;
+          k.net('setopt', { sid: f.sid, opt: name, value: v });
+        }),
+        /** getsockopt(SO_ERROR): the pending socket error as a WASI errno (0 = none). */
+        sock_error: sockWrap((k, fd, outPtr) => {
+          let f = k.sockOf(fd);
+          let code = k.net('sockerror', { sid: f.sid });
+          k.view().setUint32(outPtr, code ? CODE_TO_ERRNO[code] ?? E.IO : 0, true);
+        }),
+        /** getaddrinfo: up to `max` IPv4 addresses (host-order u32) → count; errno on failure. */
+        resolve: sockWrap((k, namePtr, nameLen, outPtr, max, countPtr) => {
+          let name = dec8.decode(k.bytes().slice(namePtr, namePtr + nameLen));
+          let ips;
+          try {
+            ips = sys.sync('net.lookup', { name });
+          } catch (err) {
+            return err.code === 'EAI_AGAIN' || err.code === 'ETIMEDOUT' ? E.AGAIN : E.NOENT;
+          }
+          let v = k.view();
+          let n = Math.min(max, ips.length);
+          for (let i = 0; i < n; i++) v.setUint32(outPtr + i * 4, ipToU32(ips[i]), true);
+          v.setUint32(countPtr, n, true);
+        }),
+        /** gethostbyaddr / getnameinfo: reverse lookup into buf. */
+        reverse: sockWrap((k, ip, buf, len) => {
+          let names;
+          try {
+            names = sys.sync('net.reverse', { addr: u32ToIp(ip >>> 0) });
+          } catch {
+            return E.NOENT;
+          }
+          let b = enc8.encode((names[0] || '') + '\0').subarray(0, len);
+          k.bytes().set(b, buf);
+        }),
+        /** chown/lchown(path): root-only, like the host's chown. */
+        chown: sockWrap((k, pathPtr, pathLen, uid, gid, follow) => {
+          let p = dec8.decode(k.bytes().slice(pathPtr, pathPtr + pathLen));
+          try {
+            sys.sync('chown', { path: p, uid, gid, follow: !!follow });
+          } catch (err) {
+            return CODE_TO_ERRNO[err.code] ?? E.IO;
+          }
+        }),
+        fd_chown: sockWrap((k, fd, uid, gid) => {
+          let f = self.fds.get(fd);
+          if (!f) return E.BADF;
+          if (!f.path) return E.INVAL;
+          try {
+            sys.sync('chown', { path: f.path, uid, gid });
+          } catch (err) {
+            return CODE_TO_ERRNO[err.code] ?? E.IO;
+          }
+        }),
+        /** chmod(path) / fchmod(fd): the file's owner or root (other/node/host.js). */
+        chmod: sockWrap((k, pathPtr, pathLen, mode) => {
+          let p = dec8.decode(k.bytes().slice(pathPtr, pathPtr + pathLen));
+          try {
+            sys.sync('chmod', { path: p, mode });
+          } catch (err) {
+            return CODE_TO_ERRNO[err.code] ?? E.IO;
+          }
+        }),
+        fd_chmod: sockWrap((k, fd, mode) => {
+          let f = self.fds.get(fd);
+          if (!f) return E.BADF;
+          if (!f.path) return E.INVAL;
+          try {
+            sys.sync('chmod', { path: f.path, mode });
+          } catch (err) {
+            return CODE_TO_ERRNO[err.code] ?? E.IO;
+          }
+        }),
+        /** Interface info for SIOCGIF* / if_nametoindex: by name, or by index (1 = lo). */
+        ifinfo: sockWrap((k, namePtr, nameLen, index, outPtr) => {
+          let name = nameLen ? dec8.decode(k.bytes().slice(namePtr, namePtr + nameLen)).replace(/\0.*$/, '') : null;
+          let list = sys.sync('net.ifinfo', {});
+          let i = name != null ? list.find((x) => x.name === name) : list.find((x) => x.index === index);
+          if (!i) return E.NOENT;
+          let v = k.view();
+          let u = [i.index, i.flags, i.mtu, ipToU32(i.ip || '0.0.0.0'), ipToU32(i.netmask || '0.0.0.0'), ipToU32(i.broadcast || '0.0.0.0')];
+          u.forEach((x, n) => v.setUint32(outPtr + n * 4, x >>> 0, true));
+          let b = k.bytes();
+          i.mac.split(':').forEach((h, n) => (b[outPtr + 24 + n] = parseInt(h, 16)));
+          b.set(enc8.encode(i.name.slice(0, 15) + '\0'), outPtr + 32);
+        }),
+        /** dup/dup2/dup3: another fd for the same open file description (shared offset/flags). */
+        dup: sockWrap((k, oldfd, newfd, outPtr) => {
+          let f = self.fds.get(oldfd);
+          if (!f) return E.BADF;
+          if (newfd === oldfd) {
+            k.view().setUint32(outPtr, newfd, true);
+            return;
+          }
+          let to = newfd;
+          if (to < 0) {
+            to = 0;
+            while (self.fds.has(to)) to++;
+          } else if (self.fds.has(to)) {
+            let old = self.fds.get(to);
+            // Programs that park fds at fixed numbers (busybox: 3, 4…) land on WASI preopens.
+            if (old.preopen != null) self.displaced.set(to, old);
+            else self._closeEntry(old);
+            self.fds.delete(to);
+          }
+          f.fdrefs = (f.fdrefs || 1) + 1;
+          self.fds.set(to, f);
+          k.view().setUint32(outPtr, to, true);
+        }),
+        /** Daemonize: tell the kernel to stop waiting for us (fork-and-exit-the-parent without fork). */
+        detach: sockWrap(() => {
+          sys.sync('proc.detach', {});
+        }),
+        gethostname: sockWrap((k, buf, len) => {
+          let name = sys.sync('net.hostname', {});
+          let b = enc8.encode(String(name) + '\0');
+          if (b.length > len) return E.NAMETOOLONG;
+          k.bytes().set(b, buf);
+        }),
+
         /** Terminal modes from tcsetattr (libtehboxen): canonical/echo/signals/output processing. */
         tty_mode(icanon, echo, isig, opost) {
           if (!ctx.tty?.stdin && !ctx.tty?.stdout) return -1;
@@ -499,9 +760,60 @@ export function createWasiModule(ctx) {
         v.setUint32(countPtr, list.length, true);
         v.setUint32(sizePtr, list.reduce((n, s) => n + enc.encode(s).length + 1, 0), true);
       };
+      /* ---------- sockets (other/net/procnet.js through the syscall channel) ---------- */
+      let net = (op, args) => {
+        try {
+          return sys.sync('net.' + op, args);
+        } catch (err) {
+          throw new WASIError(CODE_TO_ERRNO[err.code] ?? E.IO);
+        }
+      };
+      let nonblock = (f) => !!((f.flags || 0) & FDFLAG.NONBLOCK);
+      let sockOf = (fd) => {
+        let f = fdOf(fd);
+        if (f.kind !== 'socket') throw new WASIError(E.NOTSOCK);
+        return f;
+      };
+      let newSockFd = (sid, type) => {
+        let fd = 3;
+        while (self.fds.has(fd)) fd++;
+        self.fds.set(fd, { kind: 'socket', sid, type, rights: ALL_RIGHTS & ~(RIGHT.FD_SEEK | RIGHT.FD_TELL), inheriting: ALL_RIGHTS, flags: 0 });
+        return fd;
+      };
+      /** recv into iovecs; UDP datagrams come prefixed with the peer (6 bytes). */
+      let sockRecv = (f, iovs, peek, from) => {
+        let want = iovs.reduce((n, [, len]) => n + len, 0);
+        let got = net('recv', { sid: f.sid, max: Math.max(1, want), nonblock: nonblock(f) });
+        let data = got instanceof Uint8Array ? got : new Uint8Array(got || []);
+        if (f.type === 'packet') {
+          // 16-byte link header: ifindex u32, ethertype u16, pkttype u8, halen u8, MAC[6], pad.
+          if (from) from.ll = data.slice(0, 16);
+          data = data.subarray(16);
+        } else if (f.type === 'udp') {
+          if (from) {
+            from.ip = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
+            from.port = (data[4] << 8) | data[5];
+          }
+          data = data.subarray(6);
+        }
+        let b = bytes();
+        let o = 0;
+        for (let [buf, len] of iovs) {
+          let n = Math.min(len, data.length - o);
+          if (n <= 0) break;
+          b.set(data.subarray(o, o + n), buf);
+          o += n;
+        }
+        void peek;
+        return o;
+      };
+
+      self._sock = { net, newSockFd, sockOf, sockRecv, writeFrom: (...a) => writeFrom(...a), view, bytes };
+
       let readInto = (f, iovs, position) => {
         let total = 0;
         let b = bytes();
+        if (f.kind === 'socket') return sockRecv(f, iovs, false);
         if (f.kind === 'stdio') {
           if (f.stdio !== 0) throw new WASIError(E.BADF);
           if (ctx.tty?.stdin) {
@@ -545,6 +857,15 @@ export function createWasiModule(ctx) {
         let b = bytes();
         let chunks = iovs.map(([buf, len]) => b.slice(buf, buf + len));
         let total = chunks.reduce((n, c) => n + c.length, 0);
+        if (f.kind === 'socket') {
+          let all = new Uint8Array(total);
+          let o = 0;
+          for (let c of chunks) {
+            all.set(c, o);
+            o += c.length;
+          }
+          return net('send', { sid: f.sid, data: all });
+        }
         if (f.kind === 'stdio') {
           if (f.stdio === 0) throw new WASIError(E.BADF);
           let all = new Uint8Array(total);
@@ -608,6 +929,17 @@ export function createWasiModule(ctx) {
         }),
         fd_close: wrap((fd) => {
           let f = fdOf(fd);
+          // dup()ed: other fds still use this open file description.
+          if ((f.fdrefs || 1) > 1) {
+            f.fdrefs--;
+            self.fds.delete(fd);
+            return;
+          }
+          if (f.kind === 'socket') {
+            self.fds.delete(fd);
+            net('close', { sid: f.sid });
+            return;
+          }
           self._release(f);
           if (f.kind === 'file') sys.sync('unlock', { path: f.path });
           self.fds.delete(fd);
@@ -617,7 +949,7 @@ export function createWasiModule(ctx) {
         fd_fdstat_get: wrap((fd, ptr) => {
           let f = fdOf(fd);
           let v = view();
-          v.setUint8(ptr, f.kind === 'stdio' ? FILETYPE.chr : f.kind === 'dir' ? FILETYPE.dir : FILETYPE.file);
+          v.setUint8(ptr, f.kind === 'stdio' ? FILETYPE.chr : f.kind === 'dir' ? FILETYPE.dir : f.kind === 'socket' ? (f.type === 'tcp' ? FILETYPE.stream : FILETYPE.dgram) : FILETYPE.file);
           v.setUint16(ptr + 2, f.flags || 0, true);
           // isatty(): a character device without seek/tell rights.
           let tty = f.kind === 'stdio' && (f.stdio === 0 ? ctx.tty?.stdin : ctx.tty?.stdout);
@@ -636,6 +968,7 @@ export function createWasiModule(ctx) {
         fd_filestat_get: wrap((fd, ptr) => {
           let f = fdOf(fd);
           if (f.kind === 'stdio') return writeFilestat(ptr, { kind: 'chr', size: 0, mtime: Date.now() }, '/dev/stdio' + fd);
+          if (f.kind === 'socket') return writeFilestat(ptr, { kind: f.type === 'udp' ? 'dgram' : 'stream', size: 0, mtime: Date.now() }, 'socket:' + fd);
           writeFilestat(ptr, call('stat', { path: f.path }), f.path);
         }),
         fd_filestat_set_size: wrap((fd, size) => {
@@ -720,8 +1053,8 @@ export function createWasiModule(ctx) {
         fd_renumber: wrap((from, to) => {
           let f = fdOf(from);
           let old = fdOf(to);
-          self._release(old);
-          if (old.kind === 'file') sys.sync('unlock', { path: old.path });
+          if (old.preopen != null && old !== f) self.displaced.set(to, old);
+          else if (old !== f) self._closeEntry(old);
           self.fds.set(to, f);
           self.fds.delete(from);
         }),
@@ -812,7 +1145,7 @@ export function createWasiModule(ctx) {
           // A directory fd is its own capability root: ".." can't climb above it.
           let f =
             st.kind === 'dir'
-              ? { kind: 'dir', path: p, root: p, rights: rightsBase & DIR_RIGHTS & allowed, inheriting: rightsInheriting & allowed, flags: fdflags }
+              ? { kind: 'dir', path: p, root: self.rootOf(p), rights: rightsBase & DIR_RIGHTS & allowed, inheriting: rightsInheriting & allowed, flags: fdflags }
               : { kind: 'file', path: p, rights: rightsBase & FILE_RIGHTS & allowed, inheriting: rightsInheriting & allowed, flags: fdflags, pos: 0, file: null };
           if (f.kind === 'file' && oflags & O.TRUNC) {
             let file = self._load(f);
@@ -892,6 +1225,7 @@ export function createWasiModule(ctx) {
           let wait = Infinity;
           let clocks = [];
           let ttyWaits = [];
+          let sockWaits = [];
           for (let i = 0; i < nsubs; i++) {
             let s = inPtr + i * 48;
             let userdata = v.getBigUint64(s, true);
@@ -909,17 +1243,38 @@ export function createWasiModule(ctx) {
               let f = self.fds.get(fd);
               // Reading a terminal: ready only once there is input (checked below, with the timeout).
               if (tag === 1 && f?.kind === 'stdio' && f.stdio === 0 && ctx.tty?.stdin) ttyWaits.push({ userdata });
+              else if (f?.kind === 'socket') sockWaits.push({ userdata, sid: f.sid, tag });
               else events.push({ userdata, error: f ? 0 : E.BADF, type: tag, nbytes: 1n });
             }
           }
-          if (ttyWaits.length && !events.length) {
+          if (sockWaits.length) {
+            // Sockets (and maybe the terminal): ask the kernel, slicing the wait when both are involved.
+            let fds = sockWaits.map((w) => ({ sid: w.sid, events: { in: w.tag === 1, out: w.tag === 2 } }));
+            let deadline = wait === Infinity ? Infinity : performance.now() + wait;
+            let collect = (ready) => {
+              for (let w of sockWaits) {
+                let r = ready.find((x) => x.sid === w.sid);
+                if (!r) continue;
+                if ((w.tag === 1 && (r.in || r.hup || r.err)) || (w.tag === 2 && (r.out || r.hup || r.err))) events.push({ userdata: w.userdata, error: 0, type: w.tag, nbytes: 1n, hup: r.hup });
+              }
+            };
+            for (;;) {
+              let left = deadline === Infinity ? -1 : Math.max(0, Math.round(deadline - performance.now()));
+              let slice = events.length ? 0 : ttyWaits.length ? (left < 0 ? 50 : Math.min(50, left)) : left;
+              collect(net('poll', { fds, timeout: slice }));
+              if (ttyWaits.length && sys.sync('ttyPoll', { timeout: 0 })) for (let t of ttyWaits) events.push({ userdata: t.userdata, error: 0, type: 1, nbytes: 1n });
+              if (events.length || (deadline !== Infinity && performance.now() >= deadline)) break;
+            }
+            if (!events.length) for (let c of clocks) if (c.ms <= wait) events.push({ userdata: c.userdata, error: 0, type: 0, nbytes: 0n });
+            ttyWaits = [];
+          } else if (ttyWaits.length && !events.length) {
             let ready = sys.sync('ttyPoll', { timeout: wait === Infinity ? -1 : Math.max(0, Math.round(wait)) });
             if (ready) for (let t of ttyWaits) events.push({ userdata: t.userdata, error: 0, type: 1, nbytes: 1n });
             else for (let c of clocks) if (c.ms <= wait) events.push({ userdata: c.userdata, error: 0, type: 0, nbytes: 0n });
           } else if (ttyWaits.length) {
             if (sys.sync('ttyPoll', { timeout: 0 })) for (let t of ttyWaits) events.push({ userdata: t.userdata, error: 0, type: 1, nbytes: 1n });
           }
-          if (!events.length && !ttyWaits.length && clocks.length) {
+          if (!events.length && !ttyWaits.length && !sockWaits.length && clocks.length) {
             sleep(wait);
             for (let c of clocks) if (c.ms <= wait) events.push({ userdata: c.userdata, error: 0, type: 0, nbytes: 0n });
           }
@@ -929,7 +1284,7 @@ export function createWasiModule(ctx) {
             v.setUint16(o + 8, e.error, true);
             v.setUint8(o + 10, e.type);
             v.setBigUint64(o + 16, e.nbytes, true);
-            v.setUint16(o + 24, 0, true);
+            v.setUint16(o + 24, e.hup ? 1 : 0, true); // FD_READWRITE_HANGUP
           });
           v.setUint32(neventsPtr, events.length, true);
         }),
@@ -943,11 +1298,30 @@ export function createWasiModule(ctx) {
           // getRandomValues refuses shared memory: fill a private buffer and copy.
           for (let o = 0; o < len; o += 65536) b.set(crypto.getRandomValues(new Uint8Array(Math.min(65536, len - o))), buf + o);
         }),
-        // No socket fds exist yet (fake network is planned): real fds aren't sockets.
-        sock_accept: wrap((fd) => (self.fds.has(fd) ? E.NOTSOCK : E.BADF)),
-        sock_recv: wrap((fd) => (self.fds.has(fd) ? E.NOTSOCK : E.BADF)),
-        sock_send: wrap((fd) => (self.fds.has(fd) ? E.NOTSOCK : E.BADF)),
-        sock_shutdown: wrap((fd) => (self.fds.has(fd) ? E.NOTSOCK : E.BADF)),
+        // Sockets are fds created by libtehboxen's socket() (tehboxen.sock_open) or accepted here.
+        sock_accept: wrap((fd, flags, outFdPtr) => {
+          let f = sockOf(fd);
+          let r = net('accept', { sid: f.sid, nonblock: nonblock(f) || !!(flags & FDFLAG.NONBLOCK) });
+          let nfd = newSockFd(r.sid, 'tcp');
+          if (flags & FDFLAG.NONBLOCK) self.fds.get(nfd).flags = FDFLAG.NONBLOCK;
+          self.fds.get(nfd).peer = r.remote;
+          view().setUint32(outFdPtr, nfd, true);
+        }),
+        sock_recv: wrap((fd, iovs, len, riFlags, outLenPtr, outFlagsPtr) => {
+          let f = sockOf(fd);
+          let n = sockRecv(f, iovecs(iovs, len), !!(riFlags & 1));
+          let v = view();
+          v.setUint32(outLenPtr, n, true);
+          v.setUint16(outFlagsPtr, 0, true);
+        }),
+        sock_send: wrap((fd, iovs, len, _flags, outLenPtr) => {
+          let f = sockOf(fd);
+          view().setUint32(outLenPtr, writeFrom(f, iovecs(iovs, len)), true);
+        }),
+        sock_shutdown: wrap((fd, how) => {
+          let f = sockOf(fd);
+          net('shutdown', { sid: f.sid, how: how === 1 ? 'rd' : how === 2 ? 'wr' : 'rdwr' });
+        }),
       };
     }
   }

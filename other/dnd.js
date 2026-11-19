@@ -1,6 +1,6 @@
 /**
  * In-page drag & drop of VFS paths between Tehboxen windows (Explorer ↔
- * Explorer, Explorer → WinZip). dataTransfer contents can't be read during
+ * Explorer, Explorer → Archiver). dataTransfer contents can't be read during
  * dragover, so the dragged paths also live here while the drag is in flight.
  */
 

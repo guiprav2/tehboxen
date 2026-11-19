@@ -1,0 +1,3 @@
+# Recursive resolver: answers from cache, asks the registry for the rest.
+from: dns
+version: 1

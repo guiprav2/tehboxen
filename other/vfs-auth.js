@@ -1,6 +1,6 @@
 /**
  * Users, groups, and POSIX-like permission helpers for Tehboxen VFS.
- * root (uid 0) bypasses all access checks. players (uid 1000+, human: true) and grok (uid 999)
+ * root (uid 0) bypasses all access checks. players (uid 1000+, human: true) and godshand (uid 999)
  * are normal sudoers. No passwords.
  */
 import {
@@ -20,7 +20,7 @@ import {
   nextGid,
   ROOT_UID,
   PLAYER_UID,
-  GROK_UID,
+  GODSHAND_UID,
   NOBODY_UID,
   DEFAULT_FILE_MODE,
   DEFAULT_DIR_MODE,
@@ -30,7 +30,7 @@ import {
 export {
   ROOT_UID,
   PLAYER_UID,
-  GROK_UID,
+  GODSHAND_UID,
   NOBODY_UID,
   DEFAULT_FILE_MODE,
   DEFAULT_DIR_MODE,

@@ -1,0 +1,5 @@
+# Network segments: every interface plugs into one. Latency is one-way, in ms.
+internet:
+  latency: 12
+home:
+  latency: 0

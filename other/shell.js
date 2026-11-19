@@ -29,6 +29,8 @@ import {
 } from './vfs-auth.js';
 import { sizeOf as vfsSizeOf, readlink as vfsReadlink, isSymlink as vfsIsSymlink, resolveLinkTarget } from './vfs.js';
 import { getIndex as getLiveIndex } from './node/host.js';
+import { hostname as netHostname } from './net/local.js';
+import { NET_COMMANDS } from './net/commands.js';
 
 // Async project shell. Paths are project-relative. Every directory keeps a
 // `.keep` file, including directories that also contain other files.
@@ -49,7 +51,8 @@ let SIGNALS = { HUP: 1, INT: 2, QUIT: 3, KILL: 9, USR1: 10, USR2: 12, TERM: 15, 
 let WASM_RUNNER = `
 const { WASI } = require('node:wasi');
 const fs = require('node:fs');
-const [file, ...args] = process.argv.slice(1);
+// argv: the module file, then argv[0] as invoked (busybox picks its applet from it), then the arguments.
+const [file, argv0, ...args] = process.argv.slice(1);
 const bytes = fs.readFileSync(file);
 const mod = await WebAssembly.compile(bytes);
 // wasi-libc resolves absolute paths by the longest preopen prefix, "/" and "." tying (the later wins).
@@ -65,7 +68,9 @@ if (process.stdout.isTTY) {
   env.COLUMNS ??= String(process.stdout.columns || 80);
   env.LINES ??= String(process.stdout.rows || 24);
 }
-const wasi = new WASI({ version: 'preview1', args: [file, ...args], env, preopens });
+// Not sandboxed: "../x" works from any directory (wasi-libc picks the cwd preopen for it); the
+// user's file permissions are the boundary, as for any process.
+const wasi = new WASI({ version: 'preview1', args: [argv0, ...args], env, preopens, sandbox: false });
 if (WebAssembly.Module.imports(mod).some((i) => i.module === 'wasi' && i.name === 'thread-spawn')) {
   process.exitCode = await wasi.startThreads(mod, bytes);
 } else {
@@ -76,6 +81,21 @@ if (WebAssembly.Module.imports(mod).some((i) => i.module === 'wasi' && i.name ==
 
 /** Toolchain commands served by YoWASP Clang/LLD (other/node/clang.js). */
 let TOOLCHAIN = new Set(['clang', 'clang++', 'cc', 'c++', 'gcc', 'g++', 'wasm-ld', 'ld.lld', 'ld', 'ar', 'llvm-ar', 'ranlib', 'llvm-ranlib', 'nm', 'llvm-nm', 'objdump', 'llvm-objdump', 'objcopy', 'llvm-objcopy', 'strip', 'llvm-strip', 'size', 'llvm-size', 'addr2line', 'llvm-addr2line', 'llvm-symbolizer', 'c++filt', 'llvm-cxxfilt', 'llvm-dwarfdump', 'llvm-readobj']);
+
+/** break / continue / return unwind loops and functions. */
+class LoopControl extends Error {
+  constructor(kind, n = 1) {
+    super(kind);
+    this.kind = kind; // 'break' | 'continue'
+    this.n = n;
+  }
+}
+class FuncReturn extends Error {
+  constructor(code) {
+    super('return');
+    this.code = code;
+  }
+}
 
 /** Thrown by `exit` to unwind the running script. */
 class ShellExit extends Error {
@@ -104,6 +124,10 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
   let bgSink = null;
   let notices = [];
   let positional = [];
+  let tempExported = new Set(); // prefix assignments exported for one command
+  let functions = new Map(); // name → body node
+  let loopDepth = 0;
+  let localScopes = []; // per function call: Map name → previous value (undefined = unset)
   let lastArg = '';
   let startedAt = Date.now();
   let currentScript = '';
@@ -129,9 +153,9 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     EUID: String(PLAYER_UID),
     GID: String(PLAYER_UID),
     SHELL: '/bin/boxsh',
-    PATH: '/usr/local/bin:/usr/bin:/bin',
+    PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
     PWD: '/',
-    HOSTNAME: 'tehboxen',
+    HOSTNAME: netHostname(),
     // Green user@host (#50fa7b), cyan path (#8be9fd)
     PS1: '\\[\\e[38;2;80;250;123m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[38;2;139;233;253m\\]\\w\\[\\e[0m\\]$ ',
     MOTD: '',
@@ -378,7 +402,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       try {
         one = statement.background ? startJob(statement) : await evalStatement(index, statement);
       } catch (err) {
-        if (err instanceof ShellExit) {
+        if (err instanceof ShellExit || err instanceof LoopControl || err instanceof FuncReturn) {
           err.stdout = stdout + (err.stdout || '');
           err.stderr = stderr + (err.stderr || '');
         }
@@ -568,7 +592,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       try {
         return await routeCommand(index, node.redirects, stdin, (input) => evalPipelineNode(index, node.command, input ?? null));
       } catch (err) {
-        if (err instanceof ShellExit) throw err;
+        if (err instanceof ShellExit || err instanceof LoopControl || err instanceof FuncReturn) throw err;
         let message = (err && err.message) || String(err);
         if (!message.endsWith('\n')) message += '\n';
         return { code: err && err.code || 1, stdout: '', stderr: message };
@@ -583,7 +607,301 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
         groupStdin = prev;
       }
     }
+    if (node.type === 'If') return evalIf(index, node, stdin);
+    if (node.type === 'For') return evalFor(index, node, stdin);
+    if (node.type === 'ArithmeticFor') return evalArithFor(index, node, stdin);
+    if (node.type === 'While') return evalWhile(index, node, stdin);
+    if (node.type === 'Case') return evalCase(index, node, stdin);
+    if (node.type === 'Function') {
+      functions.set(expandWord(node.name), node.body);
+      return ok('');
+    }
+    if (node.type === 'TestCommand') return evalTestCommand(node);
     return { code: 1, stdout: '', stderr: `unsupported shell syntax: ${node.type}\n` };
+  }
+
+  /* ---------- compound commands ---------- */
+
+  /** Run a CompoundList with `stdin` as the group input (like `{ …; } < f`). */
+  async function evalList(index, list, stdin) {
+    let prev = groupStdin;
+    if (stdin != null) groupStdin = stdin;
+    try {
+      return await evalStatements(index, list?.commands || []);
+    } finally {
+      groupStdin = prev;
+    }
+  }
+
+  let joinRes = (acc, r) => {
+    acc.stdout += r.stdout || '';
+    acc.stderr += r.stderr || '';
+    acc.code = r.code;
+    return acc;
+  };
+
+  async function evalIf(index, node, stdin) {
+    let acc = { code: 0, stdout: '', stderr: '' };
+    let cond = await evalList(index, node.clause, stdin);
+    joinRes(acc, cond);
+    if (!cond.code) return joinRes(acc, await evalList(index, node.then, stdin));
+    if (node.else) {
+      let r = node.else.type === 'If' ? await evalIf(index, node.else, stdin) : await evalList(index, node.else, stdin);
+      return joinRes(acc, r);
+    }
+    acc.code = 0;
+    return acc;
+  }
+
+  /** Run a loop body, translating break/continue. Returns 'break' | 'continue' | null. */
+  async function loopBody(index, body, stdin, acc) {
+    loopDepth++;
+    try {
+      joinRes(acc, await evalList(index, body, stdin));
+      return null;
+    } catch (err) {
+      if (!(err instanceof LoopControl)) throw err;
+      acc.stdout += err.stdout || '';
+      acc.stderr += err.stderr || '';
+      err.stdout = err.stderr = '';
+      if (err.n > 1) {
+        err.n--;
+        throw err;
+      }
+      return err.kind;
+    } finally {
+      loopDepth--;
+    }
+  }
+
+  /** Expand a word list like bash: unquoted expansions split on whitespace, globs match files. */
+  async function expandWordList(index, words) {
+    let out = [];
+    for (let w of words || []) {
+      let value = expandWord(w);
+      let parts = w.parts || [];
+      let unquotedExpansion = parts.some((p) => ['SimpleExpansion', 'ParameterExpansion', 'CommandExpansion', 'ArithmeticExpansion'].includes(p.type));
+      let fields = unquotedExpansion ? value.split(/[ \t\n]+/).filter(Boolean) : [value];
+      let quoted = parts.some((p) => p.type === 'DoubleQuoted' || p.type === 'SingleQuoted');
+      for (let f of fields) {
+        if (!quoted && !optNoglob && hasGlob(f)) {
+          let abs = f.startsWith('/');
+          let hits = (await expand(index, cwd, f, HOME)).filter((m) => m !== resolvePath(cwd, f, HOME));
+          if (hits.length) {
+            for (let h of hits) out.push(abs ? '/' + h : cwd && h.startsWith(cwd + '/') ? h.slice(cwd.length + 1) : h);
+            continue;
+          }
+        }
+        out.push(f);
+      }
+    }
+    return out;
+  }
+
+  async function evalFor(index, node, stdin) {
+    let acc = { code: 0, stdout: '', stderr: '' };
+    let name = expandWord(node.name);
+    let items = node.wordlist ? await expandWordList(index, node.wordlist) : [...positional];
+    for (let item of items) {
+      setVar(name, item, false);
+      if ((await loopBody(index, node.body, stdin, acc)) === 'break') break;
+    }
+    return acc;
+  }
+
+  async function evalWhile(index, node, stdin) {
+    let acc = { code: 0, stdout: '', stderr: '' };
+    // `while read x; do …; done < file`: one cursor shared by every `read` in the loop.
+    let input = stdin instanceof Uint8Array ? { cursor: true, text: new TextDecoder().decode(stdin), pos: 0 } : stdin != null && typeof stdin !== 'object' ? { cursor: true, text: String(stdin), pos: 0 } : stdin;
+    let ran = false;
+    for (let guard = 0; guard < 1e6; guard++) {
+      let cond = await evalList(index, node.clause, input);
+      acc.stdout += cond.stdout || '';
+      acc.stderr += cond.stderr || '';
+      let truthy = node.kind === 'until' ? !!cond.code : !cond.code;
+      if (!truthy) break;
+      ran = true;
+      if ((await loopBody(index, node.body, input, acc)) === 'break') break;
+      if (guard % 64 === 63) await new Promise((r) => setTimeout(r, 0));
+    }
+    if (!ran) acc.code = 0;
+    return acc;
+  }
+
+  async function evalArithFor(index, node, stdin) {
+    let acc = { code: 0, stdout: '', stderr: '' };
+    let arith = (n) => (n ? evalArith(n) : 1);
+    if (node.initialize) arith(node.initialize);
+    for (let guard = 0; guard < 1e6 && (!node.test || arith(node.test)); guard++) {
+      if ((await loopBody(index, node.body, stdin, acc)) === 'break') break;
+      if (node.update) arith(node.update);
+      if (guard % 64 === 63) await new Promise((r) => setTimeout(r, 0));
+    }
+    return acc;
+  }
+
+  /** Arithmetic AST (for ((…)) clauses). */
+  function evalArith(n) {
+    let num = (v) => Number(v) || 0;
+    let varOf = (w) => (w.type === 'ArithmeticWord' && /^[A-Za-z_]\w*$/.test(w.value) ? w.value : null);
+    switch (n.type) {
+      case 'ArithmeticWord':
+        return /^-?\d+$/.test(n.value) ? Number(n.value) : num(env[n.value]);
+      case 'ArithmeticGroup':
+      case 'ArithmeticParen':
+        return evalArith(n.expression || n.body);
+      case 'ArithmeticUnary': {
+        let v = varOf(n.operand);
+        let cur = evalArith(n.operand);
+        if (n.operator === '++' || n.operator === '--') {
+          let next = n.operator === '++' ? cur + 1 : cur - 1;
+          if (v) setVar(v, String(next), false);
+          return n.prefix === false ? cur : next;
+        }
+        if (n.operator === '-') return -cur;
+        if (n.operator === '!') return cur ? 0 : 1;
+        if (n.operator === '~') return ~cur;
+        return cur;
+      }
+      case 'ArithmeticBinary': {
+        let op = n.operator;
+        if (/^([+\-*/%]|<<|>>|&|\||\^)?=$/.test(op) && op !== '==') {
+          let v = varOf(n.left);
+          let r = evalArith(n.right);
+          let l = op === '=' ? 0 : evalArith(n.left);
+          let val = op === '=' ? r : binop(op.slice(0, -1), l, r);
+          if (v) setVar(v, String(val), false);
+          return val;
+        }
+        if (op === '&&') return evalArith(n.left) && evalArith(n.right) ? 1 : 0;
+        if (op === '||') return evalArith(n.left) || evalArith(n.right) ? 1 : 0;
+        return binop(op, evalArith(n.left), evalArith(n.right));
+      }
+      case 'ArithmeticTernary':
+        return evalArith(n.test) ? evalArith(n.consequent) : evalArith(n.alternate);
+    }
+    return 0;
+  }
+  function binop(op, l, r) {
+    switch (op) {
+      case '+': return l + r;
+      case '-': return l - r;
+      case '*': return l * r;
+      case '/': return r ? Math.trunc(l / r) : 0;
+      case '%': return r ? l % r : 0;
+      case '**': return l ** r;
+      case '<': return l < r ? 1 : 0;
+      case '>': return l > r ? 1 : 0;
+      case '<=': return l <= r ? 1 : 0;
+      case '>=': return l >= r ? 1 : 0;
+      case '==': return l === r ? 1 : 0;
+      case '!=': return l !== r ? 1 : 0;
+      case '<<': return l << r;
+      case '>>': return l >> r;
+      case '&': return l & r;
+      case '|': return l | r;
+      case '^': return l ^ r;
+    }
+    return 0;
+  }
+
+  async function evalCase(index, node, stdin) {
+    let word = expandWord(node.word);
+    let acc = { code: 0, stdout: '', stderr: '' };
+    let items = node.items || [];
+    for (let i = 0; i < items.length; i++) {
+      let item = items[i];
+      let hit = (item.pattern || []).some((p) => {
+        let pat = expandWord(p);
+        let quoted = (p.parts || []).some((x) => x.type === 'DoubleQuoted' || x.type === 'SingleQuoted');
+        return quoted ? pat === word : minimatch(word, pat, { dot: true, nocomment: true, noext: false });
+      });
+      if (!hit) continue;
+      // ;; stops, ;& falls through into the next body, ;;& keeps testing.
+      for (let j = i; j < items.length; j++) {
+        joinRes(acc, await evalList(index, items[j].body, stdin));
+        if (items[j].terminator !== ';&') break;
+      }
+      if (item.terminator === ';;&') continue;
+      return acc;
+    }
+    return acc;
+  }
+
+  /** [[ … ]] */
+  function evalTestCommand(node) {
+    let w = (x) => (x?.type === 'Word' ? expandWord(x) : '');
+    let t = (e) => {
+      if (!e) return false;
+      switch (e.type) {
+        case 'TestBinary': {
+          let l = w(e.left);
+          let r = w(e.right);
+          switch (e.operator) {
+            case '==':
+            case '=':
+              return minimatch(l, r, { dot: true });
+            case '!=':
+              return !minimatch(l, r, { dot: true });
+            case '=~':
+              try {
+                return new RegExp(r).test(l);
+              } catch {
+                return false;
+              }
+            case '<': return l < r;
+            case '>': return l > r;
+            case '-eq': return Number(l) === Number(r);
+            case '-ne': return Number(l) !== Number(r);
+            case '-lt': return Number(l) < Number(r);
+            case '-le': return Number(l) <= Number(r);
+            case '-gt': return Number(l) > Number(r);
+            case '-ge': return Number(l) >= Number(r);
+            case '&&': return t(e.left) && t(e.right);
+            case '||': return t(e.left) || t(e.right);
+          }
+          return false;
+        }
+        case 'TestUnary': {
+          let v = w(e.operand);
+          if (e.operator === '-z') return v === '';
+          if (e.operator === '-n') return v !== '';
+          if (e.operator === '!') return !t(e.operand);
+          return false;
+        }
+        case 'TestLogical':
+          return e.operator === '&&' ? t(e.left) && t(e.right) : t(e.left) || t(e.right);
+        case 'TestNot':
+          return !t(e.expression || e.operand);
+        case 'TestGroup':
+          return t(e.expression);
+        case 'Word':
+          return w(e) !== '';
+      }
+      return false;
+    };
+    return { code: t(node.expression) ? 0 : 1, stdout: '', stderr: '' };
+  }
+
+  /** Call a shell function: $1… are its arguments; `return` ends it. */
+  async function callFunction(index, name, args, stdin) {
+    let body = functions.get(name);
+    let savedPos = positional;
+    positional = args.map((a) => String(a ?? ''));
+    localScopes.push(new Map());
+    try {
+      let r = await evalPipelineNode(index, body, stdin);
+      return r;
+    } catch (err) {
+      if (err instanceof FuncReturn) return { code: err.code ?? lastStatus, stdout: err.stdout || '', stderr: err.stderr || '' };
+      throw err;
+    } finally {
+      positional = savedPos;
+      for (let [k, v] of localScopes.pop()) {
+        if (v === undefined) delete env[k];
+        else env[k] = v;
+      }
+    }
   }
 
   async function evalPipeline(index, node, stdin) {
@@ -611,7 +929,8 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       }
       if (node.operators[i] === '|&') input = result.stdout + result.stderr;
       else {
-        input = result.stdout;
+        // Programs' exact bytes flow on to the next program (gzip | zcat); builtins see text.
+        input = result.stdoutBytes ?? result.stdout;
         stderr += result.stderr;
       }
     }
@@ -661,6 +980,9 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
             saved[a.name] = Object.prototype.hasOwnProperty.call(env, a.name)
               ? env[a.name]
               : undefined;
+            // `VAR=x cmd`: VAR is in cmd's environment (exported for the command only).
+            if (!exported.has(a.name)) tempExported.add(a.name);
+            exported.add(a.name);
             setVar(a.name, a.value, false);
           }
         }
@@ -668,13 +990,14 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
         try {
           return await dispatch(index, name, args, input, command);
         } catch (err) {
-          if (err instanceof ShellExit) throw err;
+          if (err instanceof ShellExit || err instanceof LoopControl || err instanceof FuncReturn) throw err;
           let message = (err && err.message) || String(err);
           if (!message.endsWith('\n')) message += '\n';
           return { code: err && err.code || 1, stdout: '', stderr: message };
         } finally {
           if (saved) {
             for (let key of Object.keys(saved)) {
+              if (tempExported.delete(key)) exported.delete(key);
               if (saved[key] === undefined) delete env[key];
               else setVar(key, saved[key], false);
             }
@@ -683,7 +1006,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
         }
       });
     } catch (err) {
-      if (err instanceof ShellExit) throw err;
+      if (err instanceof ShellExit || err instanceof LoopControl || err instanceof FuncReturn) throw err;
       let message = (err && err.message) || String(err);
       if (!message.endsWith('\n')) message += '\n';
       return { code: err && err.code || 1, stdout: '', stderr: message };
@@ -703,9 +1026,9 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       let target = redir.target ? resolvePath(cwd, targetRaw, HOME) : '';
       let src = redir.descriptor?.type === 'FileDescriptor' ? redir.descriptor.value : null;
       if (op === '<' ) {
-        let text = target === 'dev/null' ? '' : await readFile(index, target);
-        if (text == null) throw shellError(`no such file or directory: ${target}`, 1);
-        input = text;
+        let bytes = target === 'dev/null' ? new Uint8Array(0) : await readFileBytes(index, target);
+        if (bytes == null) throw shellError(`no such file or directory: ${target}`, 1);
+        input = bytes;
         continue;
       }
       if (op === '>' || op === '>>' || op === '>|') {
@@ -738,23 +1061,81 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       }
     }
     let outer = stageCtx;
-    if (fd[1].kind !== 'pipe' || fd[2].kind === 'file') stageCtx = { ...outer, redirected: true };
+    // Long-running programs (daemons) stream into redirected files as they write,
+    // instead of only when they exit: appends are serialized per redirection.
+    let chain = Promise.resolve();
+    let streamTo = (spec, fallback) =>
+      spec.kind === 'file'
+        ? (text) => {
+            chain = chain.then(() => sink(index, spec, String(text), true)).catch(() => {});
+          }
+        : fallback;
+    // Programs hand over raw bytes (outBytes/errBytes): files get them exactly (gzip > f.gz).
+    let streamBytesTo = (spec) => (bytes) => {
+      chain = chain.then(() => sinkBytes(index, { ...spec, append: true }, bytes)).catch(() => {});
+    };
+    let fileSink = null;
+    if (fd[1].kind === 'file') {
+      let out = streamTo(fd[1]);
+      let outBytes = streamBytesTo(fd[1]);
+      let errFile = fd[2].kind === 'file';
+      fileSink = {
+        // Streams into a file: not a terminal (isatty(1) is false, like `prog > f` anywhere).
+        notTty: true,
+        out,
+        outBytes,
+        err: fd[2].kind === 'pipe' ? out : streamTo(fd[2], (t) => (outer.liveErr ? outer.liveErr(t) : (fileSinkErr += t))),
+        errBytes: fd[2].kind === 'pipe' ? outBytes : errFile ? streamBytesTo(fd[2]) : null,
+      };
+    }
+    let fileSinkErr = '';
+    if (fd[1].kind !== 'pipe' || fd[2].kind === 'file') stageCtx = { ...outer, redirected: true, fileSink };
     let result;
     try {
       result = await produce(input);
     } finally {
       stageCtx = outer;
+      await chain;
     }
+    if (fileSinkErr) result = { ...result, stderr: (result.stderr || '') + fileSinkErr };
     let stdout = result.stdout || '';
     let stderr = result.stderr || '';
-    stdout = await sink(index, fd[1], stdout, true);
+    if (result.stdoutBytes && fd[1].kind === 'file') {
+      await sinkBytes(index, fd[1], result.stdoutBytes);
+      stdout = '';
+    } else stdout = await sink(index, fd[1], stdout, true);
     if (fd[2].kind === 'pipe') stdout += stderr, stderr = '';
     else if (fd[2].kind === 'file') stderr = await sink(index, fd[2], stderr, true);
-    return { code: result.code, stdout, stderr };
+    // Raw bytes keep flowing down a pipe unless stderr was merged into stdout.
+    let stdoutBytes = fd[1].kind === 'pipe' && fd[2].kind !== 'pipe' && !stderr ? result.stdoutBytes : undefined;
+    return { code: result.code, stdout, stderr, ...(stdoutBytes ? { stdoutBytes } : {}) };
+  }
+
+  /** Bytes into a redirected file (binary-safe). */
+  async function sinkBytes(index, target, bytes) {
+    if (target.path === 'dev/null') return;
+    let prev = target.append ? await readFileBytes(index, target.path) : null;
+    let all = bytes;
+    if (prev?.length) {
+      all = new Uint8Array(prev.length + bytes.length);
+      all.set(prev);
+      all.set(bytes, prev.length);
+    }
+    await ensureParents(index, target.path);
+    let existed = await existsFile(index, target.path);
+    if (existed) await requireWrite(target.path);
+    else await requireWriteCreate(target.path);
+    let { withLock, writeBlob } = await import('./vfs.js');
+    let meta = existed ? {} : { uid: actor.uid, gid: actor.gid, mode: fileMode() };
+    await withLock(target.path, (lease) => writeBlob(target.path, new Blob([all]), { ...meta, lease }), { mode: 'w' });
+    (await index.all()).add(target.path);
   }
 
   async function sink(index, target, text, keepEmpty) {
     if (!target || target.kind === 'pipe' || target.kind === 'err') return text;
+    // Nothing to append (e.g. a program already streamed its bytes there): don't re-read and
+    // rewrite the file as text, which would mangle binary content.
+    if (target.append && !text) return keepEmpty ? '' : text;
     let prev = target.append ? ((await readFile(index, target.path)) || '') : '';
     await writeFile(index, target.path, prev + text);
     return keepEmpty ? '' : text;
@@ -800,7 +1181,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
           try {
             r = await dispatchOne(index, name, [...fixed, operand], stdin, command);
           } catch (err) {
-            if (err instanceof ShellExit) throw err;
+            if (err instanceof ShellExit || err instanceof LoopControl || err instanceof FuncReturn) throw err;
             let message = (err && err.message) || String(err);
             r = { code: (err && err.code) || 1, stdout: '', stderr: message.endsWith('\n') ? message : message + '\n' };
           }
@@ -825,8 +1206,28 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       trace = '+ ' + argv.join(' ') + '\n';
     }
     let result;
+    // A loop's input cursor: `read` consumes lines; any other command gets the rest.
+    if (stdin && typeof stdin === 'object' && stdin.cursor && name !== 'read') stdin = stdin.text.slice(stdin.pos);
+    // Raw bytes on stdin stay raw only for programs; builtins and functions read text.
+    if (stdin instanceof Uint8Array && (BUILTINS.includes(name) || functions.has(name))) stdin = new TextDecoder().decode(stdin);
     try {
-      if (name === 'pwd') result = cmdPwd(args);
+      if (functions.has(name)) result = await callFunction(index, name, args, stdin);
+      else if (name === 'break' || name === 'continue') {
+        if (!loopDepth) result = ok('');
+        else throw new LoopControl(name, Math.max(1, Number(args[0]) || 1));
+      } else if (name === 'return') {
+        if (!localScopes.length && !currentScript) result = { code: 1, stdout: '', stderr: "return: can only `return' from a function or sourced script\n" };
+        else throw new FuncReturn(args.length ? Number(args[0]) & 255 : lastStatus);
+      } else if (name === 'local') {
+        let scope = localScopes[localScopes.length - 1];
+        for (let a of args) {
+          let [k, ...rest] = (a && a.type === 'Assignment' ? `${a.name}=${expandWord(a.value || a)}` : String(a)).split('=');
+          if (scope && !scope.has(k)) scope.set(k, Object.prototype.hasOwnProperty.call(env, k) ? env[k] : undefined);
+          setVar(k, rest.length ? rest.join('=') : env[k] ?? '', false);
+        }
+        result = ok('');
+      } else if (name === 'read') result = await cmdRead(args, stdin);
+      else if (name === 'pwd') result = cmdPwd(args);
       else if (name === 'cd') result = await cmdCd(index, args);
       else if (name === 'ls') result = await cmdLs(index, args);
       else if (name === 'grep') result = await cmdGrep(index, args, stdin);
@@ -905,10 +1306,13 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       else if (name === 'false') result = { code: 1, stdout: '', stderr: '' };
       else if (name === 'npm' || name === 'npx') result = (await requirePackage(name)) || (await cmdNpm(name, args, stdin, index));
       else if (name === 'pkg') result = await cmdPkg(args);
+      else if (NET_COMMANDS.includes(name)) result = await cmdNet(index, name, args, stdin);
       else if (name === 'git') result = (await requirePackage(name)) || (await cmdGit(args, index));
       else if (TOOLCHAIN.has(name)) result = (await requirePackage(name)) || (await cmdTool(name, args, stdin));
       else {
         let exe = await findExecutable(index, String(name));
+        // A base-system command (busybox) while it's still being installed at boot: wait for it.
+        if (!exe && (await awaitBaked(String(name)))) exe = await findExecutable(index, String(name));
         if (!exe) {
           void command;
           // Known but not installed: say how to get it (like Ubuntu's command-not-found).
@@ -1402,8 +1806,11 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       let uid = st?.uid ?? 0;
       let gid = st?.gid ?? 0;
       let mtime = st?.mtime;
-      let size = item.kind === 'dir' ? 0 : await vfsSize(item.path);
+      let isLink = st?.kind === 'symlink';
+      let linkText = isLink ? String(st.linkText ?? st.target ?? '') : null;
+      let size = isLink ? linkText.length : item.kind === 'dir' ? 0 : await vfsSize(item.path);
       let perms = formatMode(mode, item.kind === 'dir' ? 'dir' : 'file');
+      if (isLink) perms = 'l' + perms.slice(1);
       let display = longFmt && item.kind === 'dir' && !item.name.endsWith('/')
         ? item.name
         : item.name;
@@ -1418,7 +1825,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
         nameForGid(groups, gid),
         String(size),
         formatMtime(mtime),
-        display,
+        isLink ? `${display} -> ${linkText}` : display,
       ].join(' ');
     }
 
@@ -1473,9 +1880,16 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       return out.join('\n');
     }
 
+    // Operands are shown as typed (globs: relative to cwd, or absolute).
+    let operandName = (e) => {
+      if (!/[*?[]/.test(e.raw)) return e.raw;
+      if (String(e.raw).startsWith('/')) return '/' + e.path;
+      let c = cwd ? cwd + '/' : '';
+      return e.path.startsWith(c) ? e.path.slice(c.length) : '/' + e.path;
+    };
     if (parsed.opts.d) {
       let items = entries.map(e => ({
-        name: e.path || '.',
+        name: parsed.rest.length ? operandName(e) : '.',
         kind: e.kind,
         path: e.path,
       }));
@@ -1485,27 +1899,30 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
         for (let item of items) lines.push(await formatLong(item));
         return ok(lines.length ? lines.join('\n') + '\n' : '');
       }
-      let text = items.map(i => i.path || '.').join('\n');
+      let text = items.map(i => i.name).join('\n');
       return ok(text ? text + '\n' : '');
     }
 
-    for (let entry of entries) {
-      if (entry.kind === 'file') {
-        await requireRead(entry.path);
-        let label = longFmt
-          ? await formatLong({ name: baseName(entry.path), kind: 'file', path: entry.path })
-          : baseName(entry.path);
-        if (multi) blocks.push(entry.path + ':\n' + label);
-        else blocks.push(label);
-        continue;
+    // Like GNU ls: file operands first, in one block, named as typed; then each directory.
+    let fileItems = entries.filter((e) => e.kind === 'file').map((e) => ({ name: operandName(e), kind: 'file', path: e.path }));
+    if (fileItems.length) {
+      await sortNames(fileItems);
+      let lines = [];
+      for (let item of fileItems) {
+        await requireRead(item.path);
+        lines.push(longFmt ? await formatLong(item) : item.name);
       }
+      blocks.push(lines.join('\n'));
+    }
+    for (let entry of entries) {
+      if (entry.kind === 'file') continue;
       let header = multi || parsed.opts.R;
       if (parsed.opts.R) {
-        let block = await listRecursive(entry.path, entry.path || '.');
+        let block = await listRecursive(entry.path, parsed.rest.length ? operandName(entry) : '.');
         blocks.push(block);
       } else {
         let body = await listOne(entry.path);
-        if (header) blocks.push((entry.path || '.') + ':' + (body ? '\n' + body : ''));
+        if (header) blocks.push((parsed.rest.length ? operandName(entry) : '.') + ':' + (body ? '\n' + body : ''));
         else blocks.push(body);
       }
     }
@@ -1914,13 +2331,13 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       await requireWriteCreate(linkName);
       // Store target as the path the user typed when relative-looking; otherwise
       // the resolved absolute VFS path so location/exits stay stable.
+      // POSIX: a relative target is relative to the link's directory (stored as ./x so the VFS's
+      // root-relative convention doesn't apply); the text as typed is what readlink/ls show.
       let rawTarget = String(rest[0] ?? '');
-      let stored =
-        rawTarget.startsWith('/') || rawTarget.startsWith('.')
-          ? rawTarget.replace(/^\/+/, '') || target
-          : target;
+      let stored = rawTarget.startsWith('/') ? rawTarget.replace(/^\/+/, '') || target : rawTarget.startsWith('.') ? rawTarget : './' + rawTarget;
       try {
         await fs.symlink(stored, linkName, { force });
+        await vfsSetStat(linkName, { ...((await vfsGetStat(linkName)) || {}), kind: 'symlink', linkText: rawTarget });
       } catch (err) {
         throw shellError('ln: ' + (err?.message || err), 1);
       }
@@ -2662,7 +3079,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     let text = (await readFile(index, exe.real)) || '';
     // WebAssembly: run it as a WASI preview1 program in a node process.
     if (text.startsWith('\u0000asm')) {
-      return cmdNode(['-e', WASM_RUNNER, '/' + exe.real, ...args.map((a) => String(a ?? ''))], stdin, exe.path.split('/').pop());
+      return cmdNode(['-e', WASM_RUNNER, '/' + exe.real, '/' + exe.path.replace(/^\/+/, ''), ...args.map((a) => String(a ?? ''))], stdin, exe.path.split('/').pop());
     }
     // Native executables (ELF and friends) can't run here, same message as bash on a foreign binary.
     if (/^(\x7fELF|MZ|\xcf\xfa\xed\xfe|\xca\xfe\xba\xbe)/.test(text) || text.slice(0, 1024).includes('\u0000')) {
@@ -2688,7 +3105,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     let script = text;
     if (stdin != null) {
       let tag = '__TEHBOXEN_STDIN_' + Math.random().toString(36).slice(2, 8).toUpperCase() + '__';
-      script = `{\n${text}\n} <<'${tag}'\n${String(stdin).replace(/\n$/, '')}\n${tag}`;
+      script = `{\n${text}\n} <<'${tag}'\n${String(stdin instanceof Uint8Array ? new TextDecoder().decode(stdin) : stdin).replace(/\n$/, '')}\n${tag}`;
     }
     let live = liveSink && stageCtx.tail && !stageCtx.redirected ? liveSink : null;
     let unlink = linkInterrupt(sh);
@@ -2830,6 +3247,51 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
    * Commands from system packages (git, clang…) run only once the package is
    * installed. Returns a command-not-found result with the install hint, or null.
    */
+  /**
+   * If `name` comes from a baked package (busybox) that isn't installed yet, wait for the
+   * boot-time install — drawing pkg's progress bar on a terminal, cleared when done.
+   * True when it waited (the caller looks the command up again).
+   */
+  async function awaitBaked(name) {
+    let { packageFor, PACKAGES, isInstalled, ensureBaked, installJob } = await import('./packages.js');
+    let base = name.split('/').pop();
+    let pkg = packageFor(base);
+    if (!pkg || !PACKAGES[pkg].baked) return false;
+    if (await isInstalled(pkg)) return false;
+    let live = liveSink && stageCtx.tail && !stageCtx.redirected ? liveSink : null;
+    let done = ensureBaked();
+    let finished = false;
+    done.finally(() => (finished = true));
+    // The run may still be checking what's installed: give it a moment to start the job.
+    let job = installJob(pkg);
+    for (let i = 0; !job && !finished && i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      job = installJob(pkg);
+    }
+    if (live && job) {
+      let { progressLine } = await import('./pkg.js');
+      let drawn = false;
+      let lastAt = 0;
+      let show = (ev) => {
+        if (!ev) return;
+        let now = performance.now();
+        if (now - lastAt < 50 && !(ev.total && ev.done >= ev.total)) return;
+        lastAt = now;
+        live.out(`${drawn ? '' : '\x1b[?25l'}\r\x1b[2K${progressLine(`${pkg}:`, ev, Number(live.columns) || 80)}`);
+        drawn = true;
+      };
+      show(job.last());
+      job.listeners.add(show);
+      try {
+        await done;
+      } finally {
+        job.listeners.delete(show);
+        if (drawn) live.out('\r\x1b[2K\x1b[?25h');
+      }
+    } else await done;
+    return true;
+  }
+
   async function requirePackage(name) {
     let { packageFor, isInstalled } = await import('./packages.js');
     let pkg = packageFor(name);
@@ -2838,6 +3300,72 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
   }
 
   /** pkg: the package manager (other/pkg.js). */
+  /** read [-r] [-p prompt] [-t secs] [name…]: one line from stdin (a loop cursor, a pipe, or the terminal). */
+  async function cmdRead(args, stdin) {
+    let raw = false;
+    let prompt = '';
+    let timeout = null;
+    let names = [];
+    for (let i = 0; i < args.length; i++) {
+      let a = String(args[i]);
+      if (a === '-r') raw = true;
+      else if (a === '-p') prompt = String(args[++i] ?? '');
+      else if (a === '-t') timeout = Number(args[++i]);
+      else if (a === '-s' || a === '-e') continue;
+      else names.push(a);
+    }
+    if (!names.length) names = ['REPLY'];
+    let line = null;
+    if (stdin && typeof stdin === 'object' && stdin.cursor) {
+      if (stdin.pos < stdin.text.length) {
+        let nl = stdin.text.indexOf('\n', stdin.pos);
+        line = nl === -1 ? stdin.text.slice(stdin.pos) : stdin.text.slice(stdin.pos, nl);
+        stdin.pos = nl === -1 ? stdin.text.length : nl + 1;
+      }
+    } else if (stdin != null) {
+      let text = String(stdin);
+      if (text.length) line = text.split('\n')[0];
+    } else if (liveSink?.tty?.attachProcess) {
+      if (prompt) liveSink.err(prompt);
+      let tty = liveSink.tty.attachProcess();
+      try {
+        let bytes = [];
+        let deadline = timeout != null ? Date.now() + timeout * 1000 : null;
+        for (;;) {
+          if (deadline != null && !(await tty.poll(Math.max(0, deadline - Date.now())))) break;
+          let b = await tty.read(4096);
+          if (!b.length) break;
+          bytes.push(...b);
+          if (bytes.includes(10)) break;
+        }
+        let text = new TextDecoder().decode(new Uint8Array(bytes));
+        if (text.length) line = text.replace(/\n$/, '');
+      } finally {
+        tty.detach();
+      }
+    }
+    if (line == null) {
+      for (let n of names) setVar(n, '', false);
+      return { code: 1, stdout: '', stderr: '' };
+    }
+    if (!raw) line = line.replace(/\\(.)/g, '$1');
+    let fields = line.replace(/^[ \t]+/, '').split(/[ \t]+/);
+    names.forEach((n, i) => setVar(n, i === names.length - 1 ? fields.slice(i).join(' ').replace(/[ \t]+$/, '') : fields[i] ?? '', false));
+    return ok('');
+  }
+
+  /** ip, iptables*, ss, netstat, hostname, sysctl, conntrack (other/net/commands.js). */
+  async function cmdNet(index, name, args, stdin) {
+    let { runNetCommand } = await import('./net/commands.js');
+    let { writeMany } = await import('./vfs.js');
+    return runNetCommand(name, args.map((a) => String(a ?? '')), {
+      uid: actor.uid,
+      stdin,
+      readFile: (p) => readFile(index, resolvePath(cwd, String(p), HOME)),
+      writeFile: (abs, text) => writeMany([{ path: String(abs).replace(/^\/+/, ''), data: text, mode: 0o644, uid: 0, gid: 0 }], { uid: 0, gid: 0 }),
+    });
+  }
+
   async function cmdPkg(args) {
     let { runPkg } = await import('./pkg.js');
     let live = liveSink && stageCtx.tail && !stageCtx.redirected ? liveSink : null;
@@ -2880,7 +3408,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
 
   async function cmdNode(args, stdin, name = 'node') {
     let { runNode } = await import('./node/node.js');
-    let live = liveSink && stageCtx.tail && !stageCtx.redirected ? liveSink : null;
+    let live = liveSink && stageCtx.tail && !stageCtx.redirected ? liveSink : stageCtx.fileSink || null;
     return runNode(args.map((a) => String(a ?? '')), {
       cwd: cwd ? '/' + cwd : '/',
       env: exportedEnv(),
@@ -2895,7 +3423,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     });
   }
 
-  let BUILTINS = ['pwd', 'cd', 'ls', 'grep', 'cat', 'mkdir', 'rm', 'mv', 'cp', 'ln', 'addcontact', 'echo', 'printf', 'head', 'tail', 'find', 'sed', 'wc', 'touch', 'wf', 'export', 'unset', 'printenv', 'env', 'set', 'source', '.', 'whoami', 'id', 'groups', 'su', 'sudo', 'useradd', 'userdel', 'groupadd', 'groupdel', 'usermod', 'chmod', 'chown', 'chgrp', 'passwd', 'umask', 'true', 'false', ':', 'jobs', 'wait', 'fg', 'bg', 'kill', 'sleep', 'exit', 'test', '[', 'shift', 'type', 'which', 'command', 'basename', 'dirname', 'date', 'seq', 'bash', 'sh', 'boxsh', 'pkg'];
+  let BUILTINS = ['pwd', 'cd', 'ls', 'grep', 'cat', 'mkdir', 'rm', 'mv', 'cp', 'ln', 'addcontact', 'echo', 'printf', 'head', 'tail', 'find', 'sed', 'wc', 'touch', 'wf', 'export', 'unset', 'printenv', 'env', 'set', 'source', '.', 'whoami', 'id', 'groups', 'su', 'sudo', 'useradd', 'userdel', 'groupadd', 'groupdel', 'usermod', 'chmod', 'chown', 'chgrp', 'passwd', 'umask', 'true', 'false', ':', 'jobs', 'wait', 'fg', 'bg', 'kill', 'sleep', 'exit', 'test', '[', 'shift', 'type', 'which', 'command', 'basename', 'dirname', 'date', 'seq', 'bash', 'sh', 'boxsh', 'pkg', 'read', 'local', 'return', 'break', 'continue', ...NET_COMMANDS];
 
   async function cmdSleep(args) {
     if (!args.length) throw shellError('sleep: missing operand', 1);
@@ -3223,7 +3751,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       else name = String(a);
     }
     if (!name) throw shellError('userdel: missing operand', 1);
-    if (name === 'root' || name === actor.name || name === 'grok' || name === 'nobody') {
+    if (name === 'root' || name === actor.name || name === 'godshand' || name === 'nobody') {
       throw shellError(`userdel: cannot remove user ${name}`, 1);
     }
     let u = await getUser(name);
@@ -3484,6 +4012,15 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     if (!(await existsFile(index, path))) return null;
     await requireRead(path);
     return await fs.read(path);
+  }
+
+  /** A file's exact bytes (binary-safe), or null. */
+  async function readFileBytes(index, path) {
+    if (!(await existsFile(index, path))) return null;
+    await requireRead(path);
+    let { withLock, readBlob } = await import('./vfs.js');
+    let blob = await withLock(path, (lease) => readBlob(path, { lease }), { mode: 'r' });
+    return blob ? new Uint8Array(await blob.arrayBuffer()) : new Uint8Array(0);
   }
 
   async function existsFile(index, path) {

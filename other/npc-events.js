@@ -71,7 +71,7 @@ async function appendEvent(ev) {
  */
 export async function syncUser(username) {
   let id = String(username || '');
-  if (!id || id === 'root' || id === 'nobody' || id === 'grok') {
+  if (!id || id === 'root' || id === 'nobody' || id === 'godshand') {
     clearUser(id);
     return null;
   }

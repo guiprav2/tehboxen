@@ -27,7 +27,7 @@ export let NAME_RE = /^[a-z_][a-z0-9_-]{1,23}$/;
 
 /** System and service names a player cannot take. */
 export let RESERVED_NAMES = new Set([
-  'root', 'nobody', 'grok', 'guest', 'daemon', 'bin', 'sys', 'adm', 'admin',
+  'root', 'nobody', 'godshand', 'guest', 'daemon', 'bin', 'sys', 'adm', 'admin',
   'www-data', 'mail', 'sshd', 'systemd', 'postgres', 'mysql', 'node', 'operator',
 ]);
 

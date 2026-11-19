@@ -1,0 +1,7 @@
+# DNS server: the interim node `named` (until dnsmasq is ported).
+from: base
+version: 1
+packages: [nodejs]
+modes:
+  /usr/sbin/named: "755"
+  /etc/rc.d/named: "755"

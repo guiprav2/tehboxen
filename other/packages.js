@@ -16,7 +16,45 @@ let script = (body) => `#!/bin/sh\n${body}\n`;
 /** Commands served by the YoWASP Clang/LLD toolchain (same list as shell.js TOOLCHAIN). */
 export let TOOLCHAIN = ['clang', 'clang++', 'cc', 'c++', 'gcc', 'g++', 'wasm-ld', 'ld.lld', 'ld', 'ar', 'llvm-ar', 'ranlib', 'llvm-ranlib', 'nm', 'llvm-nm', 'objdump', 'llvm-objdump', 'objcopy', 'llvm-objcopy', 'strip', 'llvm-strip', 'size', 'llvm-size', 'addr2line', 'llvm-addr2line', 'llvm-symbolizer', 'c++filt', 'llvm-cxxfilt', 'llvm-dwarfdump', 'llvm-readobj'];
 
+/** Applets in toolchain/busybox (ports/busybox/package.sh lists them in busybox.links). */
+let BUSYBOX_APPLETS = ["[", "[[", "awk", "base32", "base64", "basename", "bc", "bunzip2", "busybox", "bzcat", "bzip2", "cal", "cat", "chmod", "cksum", "clear", "cmp", "comm", "cp", "crc32", "cryptpw", "cut", "dc", "dd", "diff", "dirname", "du", "dumpleases", "echo", "ed", "egrep", "env", "expand", "expr", "factor", "false", "fgrep", "find", "fold", "ftpget", "ftpput", "grep", "gunzip", "gzip", "hd", "head", "hexdump", "id", "ipcalc", "less", "ln", "ls", "md5sum", "mkdir", "mkpasswd", "mktemp", "more", "mv", "nc", "nl", "nohup", "nproc", "nslookup", "od", "paste", "patch", "ping", "printenv", "printf", "pwd", "readlink", "realpath", "reset", "rev", "rm", "rmdir", "sed", "seq", "sha1sum", "sha256sum", "sha3sum", "sha512sum", "shred", "shuf", "sleep", "sort", "split", "stat", "strings", "sum", "tac", "tail", "tar", "tee", "telnet", "test", "tftp", "touch", "tr", "traceroute", "true", "truncate", "tsort", "udhcpc", "udhcpd", "uname", "unexpand", "uniq", "unlink", "usleep", "uudecode", "uuencode", "watch", "wc", "wget", "which", "whoami", "whois", "xargs", "yes", "zcat"];
+
 export let PACKAGES = {
+  busybox: {
+    version: '1.37.0-11',
+    summary: 'BusyBox: coreutils, awk, sed, grep, find, tar/gzip/bzip2, less, diff, ping, traceroute, nc, wget, nslookup, telnet, udhcpc… in one binary',
+    url: new URL('../toolchain/busybox/busybox-1.37.0-wasm32-wasip1.tgz', import.meta.url).href,
+    commands: BUSYBOX_APPLETS,
+    // Part of the base system: installed at boot on every box, no `pkg install` needed.
+    baked: true,
+  },
+  xz: {
+    version: '5.8.4-3',
+    summary: 'XZ Utils: xz/LZMA compression (xz, unxz, xzcat, lzma, unlzma, lzcat; tar cJf/xJf)',
+    url: new URL('../toolchain/xz/xz-5.8.4-wasm32-wasip1.tgz', import.meta.url).href,
+    commands: ['xz', 'unxz', 'xzcat', 'lzma', 'unlzma', 'lzcat'],
+    baked: true,
+  },
+  zip: {
+    version: '3.0-16.1',
+    summary: 'Info-ZIP Zip 3.0 (Debian-patched): create and update .zip archives (zip, zipcloak, zipnote, zipsplit)',
+    url: new URL('../toolchain/zip/zip-3.0-wasm32-wasip1.tgz', import.meta.url).href,
+    commands: ['zip', 'zipcloak', 'zipnote', 'zipsplit'],
+    baked: true,
+  },
+  unzip: {
+    version: '6.0-32.1',
+    summary: 'Info-ZIP UnZip 6.0 (Debian-patched): list, test and extract .zip archives (unzip, zipinfo, funzip)',
+    url: new URL('../toolchain/unzip/unzip-6.0-wasm32-wasip1.tgz', import.meta.url).href,
+    commands: ['unzip', 'zipinfo', 'funzip'],
+    baked: true,
+  },
+  nmap: {
+    version: '7.993-2',
+    summary: 'Nmap: network exploration and security auditing (SYN/connect/UDP scans, OS and service detection, NSE scripts)',
+    url: new URL('../toolchain/nmap/nmap-7.993-wasm32-wasip1.tgz', import.meta.url).href,
+    commands: ['nmap'],
+  },
   vim: {
     version: '9.2.1364-6',
     summary: 'Vi IMproved, a programmer\'s text editor (with xxd)',
@@ -103,6 +141,16 @@ export async function installedInfo(name) {
   }
 }
 
+/** Paths that installed packages other than `name` list (a file moved between packages stays). */
+async function filesOwnedByOthers(name) {
+  let owned = new Set();
+  for (let other of Object.keys(PACKAGES)) {
+    if (other === name) continue;
+    for (let f of (await installedInfo(other))?.files || []) owned.add(f);
+  }
+  return owned;
+}
+
 /** Installed at the current version? */
 export async function isInstalled(name) {
   let info = await installedInfo(name);
@@ -145,8 +193,12 @@ function untar(bytes) {
     }
     let full = paxPath || longName || name;
     paxPath = longName = null;
-    if (type !== '0' && type !== '\0') continue;
     let path = full.split('/').filter(Boolean).slice(1).join('/');
+    if (type === '2') {
+      if (path) out.push({ path, symlink: str(h, 157, 100) });
+      continue;
+    }
+    if (type !== '0' && type !== '\0') continue;
     if (path) out.push({ path, data: data.slice(), mode: mode & 0o7777 });
   }
   return out;
@@ -179,7 +231,21 @@ async function download(url, onProgress) {
 export function installPackage(name, { onProgress, force = false } = {}) {
   let p = PACKAGES[name];
   if (!p) return Promise.reject(new Error(`unable to locate package ${name}`));
-  if (installing.has(name)) return installing.get(name);
+  if (installing.has(name)) {
+    let running = installing.get(name);
+    if (onProgress) running.listeners.add(onProgress);
+    return running.job;
+  }
+  let listeners = new Set(onProgress ? [onProgress] : []);
+  let last = null;
+  onProgress = (ev) => {
+    last = ev;
+    for (let fn of listeners) {
+      try {
+        fn(ev);
+      } catch {}
+    }
+  };
   let job = (async () => {
     await vfs.ensureReady();
     let prev = await installedInfo(name);
@@ -195,14 +261,39 @@ export function installPackage(name, { onProgress, force = false } = {}) {
     }
     // Files the old version had and this one doesn't.
     let now = new Set(entries.map((e) => e.path));
-    for (let f of prev?.files || []) if (!now.has(f)) await removeFile(f).catch(() => {});
+    let others = prev ? await filesOwnedByOthers(name) : new Set();
+    for (let f of prev?.files || []) if (!now.has(f) && !others.has(f)) await removeFile(f).catch(() => {});
     let list = [p.version, ...entries.map((e) => e.path)].join('\n') + '\n';
     await vfs.writeMany([{ path: `${STATE_DIR}/${name}`, data: list, mode: 0o644 }], { uid: 0, gid: 0, dirMode: 0o755 });
     return true;
   })();
-  installing.set(name, job);
+  installing.set(name, { job, listeners, last: () => last });
   job.catch(() => {}).finally(() => installing.delete(name));
   return job;
+}
+
+/** A running install of `name`: { job, listeners, last() }, or undefined. */
+export let installJob = (name) => installing.get(name);
+
+/** Baked (base system) packages. */
+export let BAKED = Object.keys(PACKAGES).filter((n) => PACKAGES[n].baked);
+
+let bakedRun = null;
+/**
+ * Install or upgrade the base-system packages (busybox…) — at boot on every box, in the
+ * background. Concurrent callers share the run.
+ */
+export function ensureBaked() {
+  bakedRun ??= (async () => {
+    for (let name of BAKED) {
+      try {
+        if (!(await isInstalled(name))) await installPackage(name, { force: true });
+      } catch (err) {
+        console.warn(`[pkg] ${name}:`, err?.message || err);
+      }
+    }
+  })().finally(() => (bakedRun = null));
+  return bakedRun;
 }
 
 /** Remove an installed package's files. onProgress({ phase: 'remove', done, total }). */
@@ -210,8 +301,9 @@ export async function removePackage(name, { onProgress } = {}) {
   let info = await installedInfo(name);
   if (!info) return false;
   let done = 0;
+  let others = await filesOwnedByOthers(name);
   for (let f of info.files) {
-    await removeFile(f).catch(() => {});
+    if (!others.has(f)) await removeFile(f).catch(() => {});
     if (++done % 50 === 0 || done === info.files.length) onProgress?.({ phase: 'remove', done, total: info.files.length });
   }
   await removeFile(`${STATE_DIR}/${name}`).catch(() => {});

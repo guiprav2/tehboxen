@@ -24,7 +24,7 @@ let APP_COMPONENTS = {
   explorer: 'Explorer',
   editor: 'Editor',
   mediaViewer: 'MediaViewer',
-  winzip: 'WinZip',
+  archiver: 'Archiver',
   places: 'Places',
   dangerZone: 'DangerZone',
 };
@@ -229,11 +229,11 @@ export default class Desktop {
         z: 1,
         frameClass: 'w-[640px] h-[480px] rounded-2xl',
       },
-      winzip: {
-        id: 'winzip',
+      archiver: {
+        id: 'archiver',
         multi: true,
-        title: 'WinZip',
-        shortTitle: 'WinZip',
+        title: 'Archiver',
+        shortTitle: 'Archiver',
         icon: 'nf-md-zip_box',
         iconTw: 'text-amber-200',
         accent: '#f9e2af',
@@ -352,6 +352,14 @@ export default class Desktop {
         console.warn('initWallpaper', err);
         this.actions.applyWallpaper(false);
       }
+      // Base-system packages (busybox) install in the background; commands wait for them.
+      import('../other/packages.js')
+        .then((m) => m.ensureBaked())
+        .catch((err) => console.warn('base packages', err));
+      // The world: root computer, routers, every box, and this machine's network.
+      import('../other/net/boot.js')
+        .then((m) => m.startNetwork())
+        .catch((err) => console.warn('network', err));
       // Always-on debug bridge. Dynamic import so a dbgclient failure cannot
       // hang Desktop boot (static import left the preview stuck on "loading").
       // Do not await — init must finish; bridge connects in the background.
@@ -1013,10 +1021,11 @@ export default class Desktop {
     /**
      * Open an app. Apps with `multi: true` get a new window every time;
      * other apps focus their one window. `props` reach the window's component
-     * (e.g. { openPath } for Editor / WinZip, { cwd } for Explorer).
+     * (e.g. { openPath } for Editor / Archiver, { cwd } for Explorer).
      * Returns the window id.
      */
     openApp: (appId, props = {}) => {
+      if (appId === 'winzip') appId = 'archiver'; // the desktop icon's old id
       let app = this.state.apps[appId];
       if (!app) return null;
       this.state.recentsOpen = false;

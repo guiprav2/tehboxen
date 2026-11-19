@@ -1,0 +1,485 @@
+diff --git a/archival/libarchive/open_transformer.c b/archival/libarchive/open_transformer.c
+index 44715ef..df350d1 100644
+--- a/archival/libarchive/open_transformer.c
++++ b/archival/libarchive/open_transformer.c
+@@ -108,6 +108,29 @@ void FAST_FUNC fork_transformer(int fd, const char *transform_prog)
+ 	struct fd_pair fd_pipe;
+ 	int pid;
+ 
++#if defined(__wasi__) && BB_MMU
++	/* Tehboxen: no fork or pipes. Run the transformer to completion into a
++	 * temporary file and hand that back as the "pipe" (fd), already unlinked. */
++	{
++		char tmpl[] = "/tmp/.bb-xform-XXXXXX";
++		transformer_state_t xstate;
++		int tmp = mkstemp(tmpl);
++		if (tmp < 0)
++			bb_simple_perror_msg_and_die("can't create temporary file");
++		init_transformer_state(&xstate);
++		xstate.signature_skipped = signature_skipped;
++		xstate.src_fd = fd;
++		xstate.dst_fd = tmp;
++		if (transformer(&xstate) < 0) {
++			unlink(tmpl);
++			xfunc_die();
++		}
++		xlseek(tmp, 0, SEEK_SET);
++		xmove_fd(tmp, fd);
++		unlink(tmpl);
++		return;
++	}
++#endif
+ 	xpiped_pair(fd_pipe);
+ 	pid = BB_MMU ? xfork() : xvfork();
+ 	if (pid == 0) {
+diff --git a/archival/tar.c b/archival/tar.c
+index d6ca6c1..91efb91 100644
+--- a/archival/tar.c
++++ b/archival/tar.c
+@@ -568,7 +568,55 @@ static int FAST_FUNC writeFileToTarball(struct recursive_state *state,
+ 	return TRUE;
+ }
+ 
+-# if SEAMLESS_COMPRESSION
++# if SEAMLESS_COMPRESSION && defined(__wasi__)
++/* Tehboxen: no vfork/pipes. The archive goes to a temporary file first, then
++ * "gzip -c tmp > FILE" (or to stdout) runs through system() at the end. */
++static const char *wasi_tar_out; /* -f name, NULL for stdout */
++static char wasi_tar_tmp[] = "/tmp/.tar-XXXXXX";
++static int wasi_tar_outfd = -1;
++
++static char *wasi_quote(const char *s)
++{
++	char *q = xzalloc(strlen(s) * 4 + 3), *o = q;
++	*o++ = '\'';
++	for (; *s; s++) {
++		if (*s == '\'') { strcpy(o, "'\\''"); o += 4; }
++		else *o++ = *s;
++	}
++	*o = '\'';
++	return q;
++}
++
++static void vfork_compressor(int tar_fd, const char *gzip UNUSED_PARAM)
++{
++	int tmp = mkstemp(wasi_tar_tmp);
++	if (tmp < 0)
++		bb_simple_perror_msg_and_die("can't create temporary file");
++	wasi_tar_outfd = dup(tar_fd);
++	xmove_fd(tmp, tar_fd);
++}
++
++static int wasi_compress_done(const char *gzip)
++{
++	char *tmpq = wasi_quote(wasi_tar_tmp);
++	char *cmd;
++	int st;
++	if (wasi_tar_out) {
++		char *outq = wasi_quote(wasi_tar_out);
++		close(wasi_tar_outfd); /* release the output file to the compressor */
++		cmd = xasprintf("%s -c %s > %s", gzip, tmpq, outq);
++		free(outq);
++	} else {
++		close(wasi_tar_outfd);
++		cmd = xasprintf("%s -c %s", gzip, tmpq);
++	}
++	st = system(cmd);
++	unlink(wasi_tar_tmp);
++	free(cmd);
++	free(tmpq);
++	return st;
++}
++# elif SEAMLESS_COMPRESSION
+ /* Don't inline: vfork scares gcc and pessimizes code */
+ static void NOINLINE vfork_compressor(int tar_fd, const char *gzip)
+ {
+@@ -699,7 +747,13 @@ static NOINLINE int writeTarFile(
+ 	if (errorFlag)
+ 		bb_simple_error_msg("error exit delayed from previous errors");
+ 
+-# if SEAMLESS_COMPRESSION
++# if SEAMLESS_COMPRESSION && defined(__wasi__)
++	if (gzip) {
++		int status = wasi_compress_done(gzip);
++		if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status))
++			errorFlag = TRUE;
++	}
++# elif SEAMLESS_COMPRESSION
+ 	if (gzip) {
+ 		int status;
+ 		if (safe_waitpid(-1, &status, 0) == -1)
+@@ -1209,6 +1263,9 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
+ # endif
+ 		tbInfo = xzalloc(sizeof(*tbInfo));
+ 		tbInfo->tarFd = tar_handle->src_fd;
++# if SEAMLESS_COMPRESSION && defined(__wasi__)
++		wasi_tar_out = LONE_DASH(tar_filename) ? NULL : tar_filename;
++# endif
+ 		tbInfo->verboseFlag = verboseFlag;
+ # if ENABLE_FEATURE_TAR_FROM
+ 		tbInfo->excludeList = tar_handle->reject;
+diff --git a/include/platform.h b/include/platform.h
+index ea0512f..d9de8ed 100644
+--- a/include/platform.h
++++ b/include/platform.h
+@@ -430,6 +430,18 @@ typedef unsigned smalluint;
+ #define HAVE_PRINTF_PERCENTM 1
+ #define HAVE_WAIT3 1
+ #define HAVE_DEV_FD 1
++
++/* Tehboxen (wasm32-wasip1 + wasi-libc + libtehboxen): no mounts, statfs, ethernet, ptys, /dev/fd. */
++#if defined(__wasi__)
++# undef HAVE_MNTENT_H
++# undef HAVE_SYS_STATFS_H
++# undef HAVE_NET_ETHERNET_H
++# undef HAVE_TTYNAME_R
++# undef HAVE_PTSNAME_R
++# undef HAVE_WAIT3
++# undef HAVE_DEV_FD
++# undef HAVE_XTABS
++#endif
+ #define DEV_FD_PREFIX "/dev/fd/"
+ 
+ #if defined(__UCLIBC__)
+diff --git a/libbb/udp_io.c b/libbb/udp_io.c
+index 68355e6..d932652 100644
+--- a/libbb/udp_io.c
++++ b/libbb/udp_io.c
+@@ -8,6 +8,12 @@
+  */
+ #include "libbb.h"
+ 
++#ifdef __wasi__
++/* Tehboxen: no recvmsg/sendmsg control messages; plain sendto/recvfrom. */
++# undef IP_PKTINFO
++# undef IPV6_PKTINFO
++#endif
++
+ #if defined(IPV6_PKTINFO) && !defined(IPV6_RECVPKTINFO)
+ # define IPV6_RECVPKTINFO IPV6_PKTINFO
+ #endif
+diff --git a/libbb/vfork_daemon_rexec.c b/libbb/vfork_daemon_rexec.c
+index 2055c4b..8e5fe0b 100644
+--- a/libbb/vfork_daemon_rexec.c
++++ b/libbb/vfork_daemon_rexec.c
+@@ -180,6 +180,11 @@ pid_t FAST_FUNC spawn(char **argv)
+ 	pid_t pid;
+ 
+ 	fflush_all();
++#ifdef __wasi__
++	/* Tehboxen: no fork; libtehboxen runs the child now and keeps its status for wait4pid(). */
++	(void)failed; (void)pid;
++	return tehboxen_spawn(argv);
++#endif
+ 
+ 	/* Be nice to nommu machines. */
+ 	failed = 0;
+@@ -312,8 +317,13 @@ void FAST_FUNC bb_daemonize_or_rexec(int flags, char **argv)
+ 
+ 		/* fflush_all(); - add it in fork_or_rexec() if necessary */
+ 
++#ifdef __wasi__
++		/* Tehboxen: no fork; the kernel detaches us instead (the shell stops waiting). */
++		tehboxen_detach();
++#else
+ 		if (fork_or_rexec(argv))
+ 			_exit_SUCCESS(); /* parent */
++#endif
+ 		/* if daemonizing, detach from stdio & ctty */
+ 		setsid();
+ 		dup2(fd, 0);
+diff --git a/libbb/xconnect.c b/libbb/xconnect.c
+index 0e0b247..e6ce9a7 100644
+--- a/libbb/xconnect.c
++++ b/libbb/xconnect.c
+@@ -187,6 +187,7 @@ IF_NOT_FEATURE_IPV6(sa_family_t af = AF_INET;)
+ 	const char *cp;
+ 	struct addrinfo hint;
+ 
++#ifndef __wasi__ /* no Unix sockets in WASI */
+ 	if (ENABLE_FEATURE_UNIX_LOCAL && is_prefixed_with(host, "local:")) {
+ 		struct sockaddr_un *sun;
+ 
+@@ -197,6 +198,7 @@ IF_NOT_FEATURE_IPV6(sa_family_t af = AF_INET;)
+ 		safe_strncpy(sun->sun_path, host + 6, sizeof(sun->sun_path));
+ 		return r;
+ 	}
++#endif
+ 
+ 	r = NULL;
+ 
+@@ -474,12 +476,14 @@ static char* FAST_FUNC sockaddr2str(const struct sockaddr *sa, int flags)
+ 	int rc;
+ 	socklen_t salen;
+ 
++#ifndef __wasi__
+ 	if (ENABLE_FEATURE_UNIX_LOCAL && sa->sa_family == AF_UNIX) {
+ 		struct sockaddr_un *sun = (struct sockaddr_un *)sa;
+ 		return xasprintf("local:%.*s",
+ 				(int) sizeof(sun->sun_path),
+ 				sun->sun_path);
+ 	}
++#endif
+ 
+ 	salen = LSA_SIZEOF_SA;
+ #if ENABLE_FEATURE_IPV6
+diff --git a/networking/traceroute.c b/networking/traceroute.c
+index 767f537..da588e8 100644
+--- a/networking/traceroute.c
++++ b/networking/traceroute.c
+@@ -371,8 +371,14 @@ enum {
+ 
+ enum {
+ 	SIZEOF_ICMP_HDR = 8,
++#ifdef __wasi__
++	/* fds 3+ are WASI's preopened directories: park the sockets higher. */
++	rcvsock = 60, /* receive (icmp) socket file descriptor */
++	sndsock = 61, /* send (udp/icmp) socket file descriptor */
++#else
+ 	rcvsock = 3, /* receive (icmp) socket file descriptor */
+ 	sndsock = 4, /* send (udp/icmp) socket file descriptor */
++#endif
+ };
+ 
+ /* Data section of the probe packet */
+diff --git a/networking/udhcp/arpping.c b/networking/udhcp/arpping.c
+index a11c4e8..0ce15aa 100644
+--- a/networking/udhcp/arpping.c
++++ b/networking/udhcp/arpping.c
+@@ -6,7 +6,9 @@
+  * Licensed under GPLv2, see file LICENSE in this source tree.
+  */
+ #include <netinet/if_ether.h>
++#ifndef __wasi__
+ #include <net/if_arp.h>
++#endif
+ 
+ #include "common.h"
+ 
+@@ -41,6 +43,11 @@ int FAST_FUNC arpping(uint32_t test_nip,
+ 		const char *interface,
+ 		unsigned timeo)
+ {
++#ifdef __wasi__
++	/* Tehboxen: no ARP on the simulated network; nobody answers. */
++	(void)test_nip; (void)safe_mac; (void)from_ip; (void)from_mac; (void)interface; (void)timeo;
++	return 1;
++#else
+ 	int timeout_ms;
+ 	struct pollfd pfd[1];
+ #define s (pfd[0].fd)           /* socket */
+@@ -137,4 +144,5 @@ int FAST_FUNC arpping(uint32_t test_nip,
+ 		msg += 3;
+ 	log1s(msg);
+ 	return rv;
++#endif
+ }
+diff --git a/networking/udhcp/dhcpc.c b/networking/udhcp/dhcpc.c
+index e44086c..52fdf5a 100644
+--- a/networking/udhcp/dhcpc.c
++++ b/networking/udhcp/dhcpc.c
+@@ -32,8 +32,10 @@
+ #include "dhcpc.h"
+ 
+ #include <netinet/if_ether.h>
++#ifndef __wasi__
+ #include <linux/filter.h>
+ #include <linux/if_packet.h>
++#endif
+ 
+ #ifndef PACKET_AUXDATA
+ # define PACKET_AUXDATA 8
+@@ -868,6 +870,7 @@ int send_release(uint32_t server, uint32_t ciaddr)
+ 
+ /* Returns -1 on errors that are fatal for the socket, -2 for those that aren't */
+ /* NOINLINE: limit stack usage in caller */
++#ifndef __wasi__
+ static NOINLINE int d4_recv_raw_packet(struct dhcp_packet *dhcp_pkt, int fd)
+ {
+ 	int bytes;
+@@ -974,6 +977,9 @@ static NOINLINE int d4_recv_raw_packet(struct dhcp_packet *dhcp_pkt, int fd)
+ 	memcpy(dhcp_pkt, &packet.data, bytes);
+ 	return bytes;
+ }
++#else
++#define d4_recv_raw_packet(p, fd) (-1)
++#endif
+ 
+ 
+ /*** Main ***/
+@@ -999,6 +1005,7 @@ static NOINLINE int d4_recv_raw_packet(struct dhcp_packet *dhcp_pkt, int fd)
+ /* release, possibly manually requested (SIGUSR2) */
+ #define RELEASED        6
+ 
++#ifndef __wasi__
+ static int udhcp_raw_socket(int ifindex)
+ {
+ 	int fd;
+@@ -1083,6 +1090,10 @@ static int udhcp_raw_socket(int ifindex)
+ 	return fd;
+ }
+ 
++#else
++#define udhcp_raw_socket(ifindex) (-1)
++#endif
++
+ static void change_listen_mode(int new_mode)
+ {
+ 	log1("entering listen mode: %s",
+@@ -1096,6 +1107,11 @@ static void change_listen_mode(int new_mode)
+ 		close(client_data.sockfd);
+ 		client_data.sockfd = -1;
+ 	}
++#ifdef __wasi__
++	/* Tehboxen: no packet sockets; the kernel delivers broadcasts to an unconfigured interface. */
++	if (new_mode == LISTEN_RAW)
++		new_mode = client_data.listen_mode = LISTEN_KERNEL;
++#endif
+ 	if (new_mode == LISTEN_KERNEL)
+ 		client_data.sockfd = udhcp_listen_socket(/*INADDR_ANY,*/ CLIENT_PORT, client_data.interface);
+ 	else if (new_mode != LISTEN_NONE)
+diff --git a/networking/udhcp/packet.c b/networking/udhcp/packet.c
+index f9dc11d..3d175d4 100644
+--- a/networking/udhcp/packet.c
++++ b/networking/udhcp/packet.c
+@@ -10,7 +10,9 @@
+ #include "dhcpd.h"
+ #include <netinet/in.h>
+ #include <netinet/if_ether.h>
++#ifndef __wasi__
+ #include <netpacket/packet.h>
++#endif
+ 
+ #if ENABLE_UDHCPC || ENABLE_UDHCPD
+ void FAST_FUNC udhcp_init_header(struct dhcp_packet *packet, char type)
+@@ -105,6 +107,53 @@ int FAST_FUNC udhcp_recv_kernel_packet(struct dhcp_packet *packet, int fd)
+ 	return bytes;
+ }
+ 
++#ifdef __wasi__
++#include <net/if.h>
++/* Tehboxen: no packet sockets. The kernel sends from 0.0.0.0 / to broadcasts on a
++ * UDP socket bound to the interface, which is all a DHCP exchange needs. */
++int FAST_FUNC udhcp_send_raw_packet(struct dhcp_packet *dhcp_pkt,
++		uint32_t source_nip, int source_port,
++		uint32_t dest_nip, int dest_port, const uint8_t *dest_arp UNUSED_PARAM,
++		int ifindex)
++{
++	char ifname[IF_NAMESIZE];
++	struct sockaddr_in sa;
++	unsigned padding;
++	int one = 1;
++	int result = -1;
++	int fd = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
++	if (fd < 0) {
++		bb_simple_perror_msg("socket(UDP)");
++		return -1;
++	}
++	setsockopt_reuseaddr(fd);
++	setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
++	if (if_indextoname(ifindex, ifname))
++		setsockopt_bindtodevice(fd, ifname);
++	memset(&sa, 0, sizeof(sa));
++	sa.sin_family = AF_INET;
++	sa.sin_port = htons(source_port);
++	sa.sin_addr.s_addr = source_nip;
++	if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
++		bb_simple_perror_msg("bind(UDP)");
++		goto ret;
++	}
++	memset(&sa, 0, sizeof(sa));
++	sa.sin_family = AF_INET;
++	sa.sin_port = htons(dest_port);
++	sa.sin_addr.s_addr = dest_nip;
++	padding = DHCP_OPTIONS_BUFSIZE - 1 - udhcp_end_option(dhcp_pkt->options);
++	if (padding > DHCP_SIZE - 300)
++		padding = DHCP_SIZE - 300;
++	udhcp_dump_packet(dhcp_pkt);
++	result = sendto(fd, dhcp_pkt, DHCP_SIZE - padding, 0, (struct sockaddr *)&sa, sizeof(sa));
++	if (result < 0)
++		bb_simple_perror_msg("sendto");
++ ret:
++	close(fd);
++	return result;
++}
++#else
+ /* Construct a ip/udp header for a packet, send packet */
+ int FAST_FUNC udhcp_send_raw_packet(struct dhcp_packet *dhcp_pkt,
+ 		uint32_t source_nip, int source_port,
+@@ -190,6 +239,7 @@ int FAST_FUNC udhcp_send_raw_packet(struct dhcp_packet *dhcp_pkt,
+ 	}
+ 	return result;
+ }
++#endif
+ 
+ /* Let the kernel do all the work for packet generation */
+ int FAST_FUNC udhcp_send_kernel_packet(struct dhcp_packet *dhcp_pkt,
+diff --git a/networking/udhcp/signalpipe.c b/networking/udhcp/signalpipe.c
+index 774c4be..f243c82 100644
+--- a/networking/udhcp/signalpipe.c
++++ b/networking/udhcp/signalpipe.c
+@@ -40,6 +40,10 @@ void FAST_FUNC udhcp_sp_setup(void)
+ 
+ 	/* All callers also want this, so... */
+ 	bb_sanitize_stdio();
++#ifdef __wasi__
++	/* Tehboxen: no pipes and no signals from outside the process: nothing to wait on. */
++	return;
++#endif
+ 
+ 	/* was socketpair, but it needs AF_UNIX in kernel */
+ 	xpiped_pair(signal_pipe);
+@@ -67,8 +71,13 @@ void FAST_FUNC udhcp_sp_setup(void)
+  */
+ void FAST_FUNC udhcp_sp_fd_set(struct pollfd *pfds, int extra_fd)
+ {
++#ifdef __wasi__
++	pfds[0].fd = -1;
++	pfds[0].events = 0;
++#else
+ 	pfds[0].fd = READ_FD;
+ 	pfds[0].events = POLLIN;
++#endif
+ 	pfds[1].fd = -1;
+ 	if (extra_fd >= 0) {
+ 		close_on_exec_on(extra_fd);
+@@ -85,6 +94,9 @@ void FAST_FUNC udhcp_sp_fd_set(struct pollfd *pfds, int extra_fd)
+ int FAST_FUNC udhcp_sp_read(void)
+ {
+ 	unsigned char sig;
++#ifdef __wasi__
++	return 0;
++#endif
+ 
+ 	/* Can't block here, fd is in nonblocking mode */
+ 	if (safe_read(READ_FD, &sig, 1) != 1)
+diff --git a/networking/udhcp/socket.c b/networking/udhcp/socket.c
+index 35e1068..d9352cc 100644
+--- a/networking/udhcp/socket.c
++++ b/networking/udhcp/socket.c
+@@ -35,7 +35,12 @@ int FAST_FUNC udhcp_read_interface(const char *interface, int *ifindex, uint32_t
+ 	struct sockaddr_in *our_ip;
+ 
+ 	memset(ifr, 0, sizeof(*ifr));
++#ifdef __wasi__
++	/* Tehboxen: any socket will do for the SIOCGIF* ioctls; raw IP sockets don't exist. */
++	fd = xsocket(AF_INET, SOCK_DGRAM, 0);
++#else
+ 	fd = xsocket(AF_INET, SOCK_RAW, IPPROTO_RAW);
++#endif
+ 
+ 	ifr->ifr_addr.sa_family = AF_INET;
+ 	strncpy_IFNAMSIZ(ifr->ifr_name, interface);
+diff --git a/scripts/trylink b/scripts/trylink
+index 2255dee..49cb020 100755
+--- a/scripts/trylink
++++ b/scripts/trylink
+@@ -95,6 +95,8 @@ fi
+ 
+ START_GROUP="-Wl,--start-group"
+ END_GROUP="-Wl,--end-group"
++# wasm-ld (WASI/Tehboxen) resolves archives without groups.
++if check_cc "-Wl,--start-group" 2>/dev/null; then :; else START_GROUP=""; END_GROUP=""; fi
+ INFO_OPTS() {
+ 	echo "-Wl,--warn-common -Wl,-Map,$EXE.map -Wl,--verbose"
+ }
