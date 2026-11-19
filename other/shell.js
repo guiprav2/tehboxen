@@ -698,8 +698,76 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     return out;
   }
 
+  /* ---------- command substitution: $(…) and `…` ---------- */
+
+  // Output of a `$(…)` stays on its AST part until the next evaluation of that command re-runs it.
+  let SUBST = Symbol('subst');
+  let substStderr = '';
+  let lastSubstCode = null;
+
+  /** CommandExpansion parts in a word/command, not descending into nested substitutions. */
+  function findSubsts(node, out = [], seen = new Set()) {
+    if (!node || typeof node !== 'object' || seen.has(node)) return out;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (let x of node) findSubsts(x, out, seen);
+      return out;
+    }
+    if (node.type === 'CommandExpansion') {
+      out.push(node);
+      return out;
+    }
+    // Word parts are lazy getters on the parser's nodes: read the known fields, then own ones.
+    for (let k of ['name', 'prefix', 'suffix', 'redirects', 'target', 'value', 'word', 'parts', 'pattern']) {
+      let v;
+      try {
+        v = node[k];
+      } catch {
+        continue;
+      }
+      if (v && typeof v === 'object') findSubsts(v, out, seen);
+    }
+    for (let [k, v] of Object.entries(node)) if (v && typeof v === 'object' && k !== 'parent') findSubsts(v, out, seen);
+    return out;
+  }
+
+  /** The script inside $(…) / `…` (backquotes undo their \`, \\ and \$ escapes). */
+  function substScript(text) {
+    let t = String(text || '');
+    if (t.startsWith('$(') && t.endsWith(')')) return t.slice(2, -1);
+    if (t.startsWith('`') && t.endsWith('`')) return t.slice(1, -1).replace(/\\([`\\$])/g, '$1');
+    return t;
+  }
+
+  /** Run every substitution in `node` (a child shell with all variables and the cwd). */
+  async function runSubsts(node) {
+    for (let part of findSubsts(node)) {
+      let sh = createShell(fs, { wfCursor, wfOptions, home: HOME, ppid: shellPid });
+      await sh.become(actor.name);
+      for (let [k, v] of Object.entries(env)) sh.setVar(k, String(v), exported.has(k));
+      sh.inheritFrom({ functions, positional });
+      if (cwd) await sh.run('cd ' + shellQuote('/' + cwd));
+      let r = await sh.run(substScript(part.text));
+      let out = r.stdoutBytes ? new TextDecoder().decode(r.stdoutBytes) : String(r.stdout || '');
+      part[SUBST] = out.replace(/\n+$/, '');
+      substStderr += r.stderr || '';
+      lastSubstCode = r.code ?? 0;
+    }
+  }
+
+  /** stderr the substitutions of the command just run produced, ahead of its own. */
+  function withSubstStderr(res) {
+    if (!substStderr) return res;
+    let e = substStderr;
+    substStderr = '';
+    return { ...res, stderr: e + (res?.stderr || '') };
+  }
+
   async function evalFor(index, node, stdin) {
     let acc = { code: 0, stdout: '', stderr: '' };
+    if (node.wordlist) await runSubsts(node.wordlist);
+    acc.stderr += substStderr;
+    substStderr = '';
     let name = expandWord(node.name);
     let items = node.wordlist ? await expandWordList(index, node.wordlist) : [...positional];
     for (let item of items) {
@@ -738,6 +806,14 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       if (guard % 64 === 63) await new Promise((r) => setTimeout(r, 0));
     }
     return acc;
+  }
+
+  /** Integer arithmetic on text (fallback for $((…)) without an AST): + - * / % ( ) and names. */
+  function arithText(t) {
+    let src = t.replace(/\$\{?([A-Za-z_]\w*)\}?/g, (_, n) => String(Number(env[n]) || 0)).replace(/[A-Za-z_]\w*/g, (n) => String(Number(env[n]) || 0));
+    if (!/^[\d\s+\-*/%()<>=!&|]*$/.test(src)) throw shellError(`${t}: syntax error in expression`, 1);
+    let v = Function('return (' + (src.trim() || '0') + ')')();
+    return Math.trunc(Number(v) || 0);
   }
 
   /** Arithmetic AST (for ((…)) clauses). */
@@ -806,6 +882,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
   }
 
   async function evalCase(index, node, stdin) {
+    await runSubsts([node.word, ...(node.items || []).map((i) => i.pattern)]);
     let word = expandWord(node.word);
     let acc = { code: 0, stdout: '', stderr: '' };
     let items = node.items || [];
@@ -939,6 +1016,12 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
   }
 
   async function evalSimple(index, command, stdin) {
+    lastSubstCode = null;
+    await runSubsts(command);
+    return withSubstStderr(await evalSimpleInner(index, command, stdin));
+  }
+
+  async function evalSimpleInner(index, command, stdin) {
     try {
       return await routeCommand(index, command.redirects || [], stdin, async input => {
         let prefix = command.prefix || [];
@@ -956,7 +1039,8 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
         if (!command.name) {
           for (let a of assignments) setVar(a.name, a.value, false);
           syncPwd();
-          return ok('');
+          // `x=$(cmd)`: $? is the substitution's status.
+          return lastSubstCode ? { code: lastSubstCode, stdout: '', stderr: '' } : ok('');
         }
 
         // Expand command words before applying temporary prefix assignments
@@ -970,7 +1054,8 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
             args.push(arg); // export/readonly keep Assignment nodes
             continue;
           }
-          if (arg.type === 'Word') args.push(expandWord(arg));
+          // Field splitting of unquoted expansions and pathname expansion, like any POSIX shell.
+          if (arg.type === 'Word') args.push(...(await expandWordList(index, [arg])));
         }
 
         let saved = null;
@@ -1613,6 +1698,16 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     }
     if (part.type === 'Escape') {
       return String(part.value ?? part.text?.slice(1) ?? '');
+    }
+    if (part[SUBST] !== undefined) return part[SUBST];
+    if (part.type === 'ArithmeticExpansion') {
+      // $((…)): the parser's arithmetic AST, like for ((…)); else the text, with $vars expanded.
+      let expr;
+      try {
+        expr = part.expression ?? part.arithmetic ?? part.body;
+      } catch {}
+      if (expr && typeof expr === 'object') return String(evalArith(expr));
+      return String(arithText(String(part.text || '').replace(/^\$\(\(|\)\)$/g, '')));
     }
     // Unsupported expansions (command, arithmetic, brace, …) → empty / literal text
     if (part.text) return String(part.text);
@@ -4115,6 +4210,11 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     get pid() { return shellPid; },
     setVar,
     expandWord,
+    /** A subshell's copy of its parent's functions and positional parameters ($(…), ( … )). */
+    inheritFrom(parent) {
+      for (let [k, v] of parent.functions || []) functions.set(k, v);
+      positional = [...(parent.positional || [])];
+    },
   };
 }
 

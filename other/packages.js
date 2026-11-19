@@ -17,12 +17,12 @@ let script = (body) => `#!/bin/sh\n${body}\n`;
 export let TOOLCHAIN = ['clang', 'clang++', 'cc', 'c++', 'gcc', 'g++', 'wasm-ld', 'ld.lld', 'ld', 'ar', 'llvm-ar', 'ranlib', 'llvm-ranlib', 'nm', 'llvm-nm', 'objdump', 'llvm-objdump', 'objcopy', 'llvm-objcopy', 'strip', 'llvm-strip', 'size', 'llvm-size', 'addr2line', 'llvm-addr2line', 'llvm-symbolizer', 'c++filt', 'llvm-cxxfilt', 'llvm-dwarfdump', 'llvm-readobj'];
 
 /** Applets in toolchain/busybox (ports/busybox/package.sh lists them in busybox.links). */
-let BUSYBOX_APPLETS = ["[", "[[", "awk", "base32", "base64", "basename", "bc", "bunzip2", "busybox", "bzcat", "bzip2", "cal", "cat", "chmod", "cksum", "clear", "cmp", "comm", "cp", "crc32", "cryptpw", "cut", "dc", "dd", "diff", "dirname", "du", "dumpleases", "echo", "ed", "egrep", "env", "expand", "expr", "factor", "false", "fgrep", "find", "fold", "ftpget", "ftpput", "grep", "gunzip", "gzip", "hd", "head", "hexdump", "id", "ipcalc", "less", "ln", "ls", "md5sum", "mkdir", "mkpasswd", "mktemp", "more", "mv", "nc", "nl", "nohup", "nproc", "nslookup", "od", "paste", "patch", "ping", "printenv", "printf", "pwd", "readlink", "realpath", "reset", "rev", "rm", "rmdir", "sed", "seq", "sha1sum", "sha256sum", "sha3sum", "sha512sum", "shred", "shuf", "sleep", "sort", "split", "stat", "strings", "sum", "tac", "tail", "tar", "tee", "telnet", "test", "tftp", "touch", "tr", "traceroute", "true", "truncate", "tsort", "udhcpc", "udhcpd", "uname", "unexpand", "uniq", "unlink", "usleep", "uudecode", "uuencode", "watch", "wc", "wget", "which", "whoami", "whois", "xargs", "yes", "zcat"];
+let BUSYBOX_APPLETS = ["[", "[[", "awk", "base32", "base64", "basename", "bc", "bunzip2", "busybox", "bzcat", "bzip2", "cal", "cat", "chmod", "cksum", "clear", "cmp", "comm", "cp", "crc32", "cryptpw", "cut", "dc", "dd", "diff", "dirname", "du", "dumpleases", "echo", "ed", "egrep", "env", "expand", "expr", "factor", "false", "fgrep", "find", "fold", "ftpget", "ftpput", "grep", "gunzip", "gzip", "hd", "head", "hexdump", "id", "ipcalc", "less", "ln", "ls", "md5sum", "mkdir", "mkpasswd", "mktemp", "more", "mv", "nc", "nl", "nohup", "nproc", "nslookup", "od", "paste", "patch", "ping", "printenv", "printf", "pwd", "readlink", "realpath", "reset", "rev", "rm", "rmdir", "sed", "seq", "sha1sum", "sha256sum", "sha3sum", "sha512sum", "shred", "shuf", "sleep", "sort", "split", "stat", "strings", "sum", "tac", "tail", "tar", "tee", "telnet", "test", "tftp", "touch", "tr", "traceroute", "true", "truncate", "tsort", "udhcpc", "udhcpd", "uname", "unexpand", "uniq", "unlink", "usleep", "uudecode", "uuencode", "watch", "wc", "which", "whoami", "whois", "xargs", "yes", "zcat"];
 
 export let PACKAGES = {
   busybox: {
-    version: '1.37.0-11',
-    summary: 'BusyBox: coreutils, awk, sed, grep, find, tar/gzip/bzip2, less, diff, ping, traceroute, nc, wget, nslookup, telnet, udhcpc… in one binary',
+    version: '1.37.0-13',
+    summary: 'BusyBox: coreutils, awk, sed, grep, find, tar/gzip/bzip2, less, diff, ping, traceroute, nc, nslookup, telnet, udhcpc… in one binary',
     url: new URL('../toolchain/busybox/busybox-1.37.0-wasm32-wasip1.tgz', import.meta.url).href,
     commands: BUSYBOX_APPLETS,
     // Part of the base system: installed at boot on every box, no `pkg install` needed.
@@ -34,6 +34,33 @@ export let PACKAGES = {
     url: new URL('../toolchain/xz/xz-5.8.4-wasm32-wasip1.tgz', import.meta.url).href,
     commands: ['xz', 'unxz', 'xzcat', 'lzma', 'unlzma', 'lzcat'],
     baked: true,
+  },
+  openssl: {
+    version: '3.5.9-2',
+    summary: 'OpenSSL 3.5 LTS: TLS client/server, keys, CSRs, certificates, CAs (openssl), trust in /etc/ssl/certs',
+    url: new URL('../toolchain/openssl/openssl-3.5.9-wasm32-wasip1.tgz', import.meta.url).href,
+    commands: ['openssl'],
+    baked: true,
+  },
+  wget: {
+    version: '1.25.0-2',
+    summary: 'GNU Wget with OpenSSL: HTTP/HTTPS/FTP downloads, recursive mirroring, verified TLS',
+    url: new URL('../toolchain/wget/wget-1.25.0-wasm32-wasip1.tgz', import.meta.url).href,
+    commands: ['wget'],
+    baked: true,
+  },
+  curl: {
+    version: '8.23.0-2',
+    summary: 'curl with OpenSSL: transfer data over HTTP(S), FTP(S), SMTP(S), IMAP(S), WebSocket…',
+    url: new URL('../toolchain/curl/curl-8.23.0-wasm32-wasip1.tgz', import.meta.url).href,
+    commands: ['curl'],
+    baked: true,
+  },
+  uacme: {
+    version: '1.8.1-2',
+    summary: 'uacme: ACME client — free TLS certificates from TrustRoot (or any ACME CA) via http-01',
+    url: new URL('../toolchain/uacme/uacme-1.8.1-wasm32-wasip1.tgz', import.meta.url).href,
+    commands: ['uacme'],
   },
   zip: {
     version: '3.0-16.1',
@@ -50,7 +77,7 @@ export let PACKAGES = {
     baked: true,
   },
   nmap: {
-    version: '7.993-2',
+    version: '7.993-3',
     summary: 'Nmap: network exploration and security auditing (SYN/connect/UDP scans, OS and service detection, NSE scripts)',
     url: new URL('../toolchain/nmap/nmap-7.993-wasm32-wasip1.tgz', import.meta.url).href,
     commands: ['nmap'],

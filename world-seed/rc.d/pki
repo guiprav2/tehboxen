@@ -1,0 +1,35 @@
+#!/bin/sh
+# TrustRoot, the world's public CA: a root (in every box's trust bundle, from /world/pki/trust)
+# and the R1 issuing CA its ACME server (box acme, acme.trustroot.net) signs certificates with.
+# Made once; delete /world/pki to start the world's PKI over (then reprovision the acme box).
+P=/world/pki
+if [ -f $P/trust/trustroot-root.pem ] && [ -f $P/issuers/trustroot-r1.pem ]; then
+  exit 0
+fi
+mkdir -p $P/trust $P/issuers $P/private
+chmod 700 $P/private
+cat > $P/private/ext.cnf <<'EXT'
+[root]
+basicConstraints=critical,CA:true
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+[issuer]
+basicConstraints=critical,CA:true,pathlen:0
+keyUsage=critical,keyCertSign,cRLSign,digitalSignature
+extendedKeyUsage=serverAuth,clientAuth
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid
+EXT
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -nodes \
+  -keyout $P/private/trustroot-root.key -out $P/trust/trustroot-root.pem \
+  -subj "/C=US/O=TrustRoot Inc./CN=TrustRoot Global Root CA" -days 7300 \
+  -config $P/private/ext.cnf -extensions root
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -keyout $P/private/trustroot-r1.key -out $P/private/trustroot-r1.csr \
+  -subj "/C=US/O=TrustRoot Inc./CN=TrustRoot R1"
+openssl x509 -req -in $P/private/trustroot-r1.csr -CA $P/trust/trustroot-root.pem \
+  -CAkey $P/private/trustroot-root.key -set_serial 0x$(openssl rand -hex 8) -days 3650 \
+  -extfile $P/private/ext.cnf -extensions issuer -out $P/issuers/trustroot-r1.pem
+chmod 600 $P/private/*.key
+chmod 644 $P/trust/trustroot-root.pem $P/issuers/trustroot-r1.pem
+echo "pki: TrustRoot root + R1 issuer created"

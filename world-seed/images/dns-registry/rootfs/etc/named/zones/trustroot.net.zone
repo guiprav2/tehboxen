@@ -1,0 +1,6 @@
+$ORIGIN trustroot.net.
+$TTL 3600
+@         IN SOA ns.registry.net. hostmaster.registry.net. 1 7200 3600 1209600 300
+@         IN NS  ns.registry.net.
+@         IN A   23.51.7.20
+acme      IN A   23.51.7.20

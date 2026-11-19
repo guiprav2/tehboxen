@@ -11,7 +11,7 @@ for f in sigaction sigprocmask pthread_sigmask sigsuspend sigemptyset sigfillset
   getservbyname getservbyport getprotobyname if_nametoindex if_indextoname if_nameindex \
   ether_ntoa ether_aton res_init res_query dn_expand system popen pclose execvp execv execve execl execlp \
   tcgetattr tcsetattr cfmakeraw getpwnam getpwuid getgrnam getgrgid getpwent setpwent endpwent \
-  openlog syslog vsyslog closelog settimeofday; do
+  openlog syslog vsyslog closelog settimeofday raise fchdir chroot psignal killpg sigwait mkfifo; do
   eval "ac_cv_func_$f=\${ac_cv_func_$f=yes}"
 done
 # fork exists (it fails at run time, like a fork-less system) — let configure know there is no fork.

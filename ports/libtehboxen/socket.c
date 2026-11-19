@@ -548,3 +548,23 @@ long recvmsg(int fd, struct msghdr *m, int flags) {
   free(buf);
   return r;
 }
+
+/* send(): wasi-libc refuses any flags; programs pass MSG_NOSIGNAL (curl, OpenSSL BIOs…), which
+ * means nothing without SIGPIPE, and MSG_DONTWAIT, done here by going non-blocking for one call. */
+ssize_t __real_send(int fd, const void *buf, size_t len, int flags);
+ssize_t __wrap_send(int fd, const void *buf, size_t len, int flags) {
+  if (is_packet(fd)) return sendto(fd, buf, len, flags, 0, 0);
+  int fl = -1;
+  if (flags & MSG_DONTWAIT) {
+    fl = fcntl(fd, F_GETFL);
+    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    else fl = -1;
+  }
+  ssize_t r = __real_send(fd, buf, len, flags & ~(MSG_NOSIGNAL | MSG_DONTWAIT));
+  if (fl >= 0) {
+    int e = errno;
+    fcntl(fd, F_SETFL, fl);
+    errno = e;
+  }
+  return r;
+}

@@ -681,6 +681,19 @@ other/issues.js edit <id>
 * `sudo pkg install nmap` (ports/nmap, 7.993): libpcap with a WASI AF_PACKET backend, libdnet with `/proc/net/route` routing; connect scans unprivileged, SYN/UDP/ARP/OS scans as root. No OpenSSL/libssh2/ncat/nping yet. Our stack isn't in nmap-os-db (`-O` finds no match).
 * ports/test.sh smoke-tests built ports on the host (Node WASI + stand-in imports); build-all.sh ends with it.
 
+## Tehboxen: TLS, the world's PKI, ACME
+
+* libtehboxen wraps `send()` (wasi-libc rejects any flags; MSG_NOSIGNAL is dropped, MSG_DONTWAIT emulated) — it's in `$TB_LDFLAGS`; without it curl/uacme fail every request with "Failed sending data to the peer".
+* libtehboxen also provides `<err.h>` (warn/err family, weak) — wasi-libc declares but doesn't build it.
+* Base system has OpenSSL 3.5 (`openssl` CLI; ports/openssl also leaves headers + static libs in `$WORK/openssl-root` for other ports) and GNU wget with OpenSSL (busybox's wget applet is off). One trust bundle per box: `/etc/ssl/certs/ca-certificates.crt` (`/etc/ssl/cert.pem` → it; `/etc/wgetrc` points at it).
+* Trust is world content: every box (and the page, `local`) rewrites its bundle at boot from the root computer's `/world/pki/trust/*.pem` (`world.trust` op; boot.js `syncLocalTrust`, kernel `syncTrust`). Never bake CA certs into packages or host JS.
+* The root computer runs `/world/rc` (→ `/world/rc.d/*`, idempotent) as godshand at every boot, after the base system is installed — world automation. world-seed's `rc.d/pki` makes TrustRoot (root CA in `/world/pki/trust`, R1 issuer in `/world/pki/issuers`, keys in `/world/pki/private`, 0700).
+* Images can take files from /world at provisioning: `world_files: { /box/path: world-relative }` in image.yaml (default mode 0600); a missing source fails provisioning (retried next boot).
+* TrustRoot's ACME server: box `acme` (image `acme`, 23.51.7.20, `acme.trustroot.net`, zone in dns-registry) runs `acmed` (node, RFC 8555: accounts, orders, http-01 only, ES256/ES384/RS256 JWS via WebCrypto, signs with `openssl x509` as R1, 90 days). Directory: `http://acme.trustroot.net/directory` (acmed could now serve HTTPS with a TrustRoot certificate of its own). Client: `sudo pkg install uacme` (ports/uacme; hook `/usr/share/uacme/uacme.sh` writes http-01 tokens to /var/www/.well-known/acme-challenge, which a web server on :80 must serve). curl (ports/curl, OpenSSL, base system) also verifies against the world bundle.
+* Node runtime `tls`/`https` are real TLS 1.2/1.3: other/node/tls.js drives libssl in toolchain/tls/tlsshim.wasm (ports/tlsshim, a reactor module; ciphertext through memory BIOs over net sockets). Clients trust `ca` or the box bundle and verify chain + host name (Node error codes, `rejectUnauthorized: false` works); `tls.createServer`/`https.createServer({ cert, key })` serve. Express works (npm install express in a box): http :80 for http-01, https :443 with the uacme certificate.
+* Node runtime: pending `crypto.subtle` calls hold a ref (an async main awaiting WebCrypto no longer exits early).
+* boxsh: `$(…)`/backquote command substitution (child shell with all variables, functions, positional params; `x=$(cmd)` sets `$?`), `$((…))`, and POSIX field splitting + pathname expansion of command arguments (before, only `for` lists and a few builtins globbed).
+
 ## Tehboxen: the world — boxes, networks, the root computer
 
 * Every machine is a **box**: the player's own is the desktop page (`local`, store `tehboxen-vfs`); every other box is a Worker running other/box/kernel.js named `box:<id>`, with its own VFS store (`tehboxen-box-<id>`), users, processes and network stack. Module singletons are per realm, so shell/node/WASI/packages code is the same on every box. All boxes boot with the world and stay up (a crashed box reboots).

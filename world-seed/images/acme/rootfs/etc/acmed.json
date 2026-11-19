@@ -1,0 +1,9 @@
+{
+  "listen": 80,
+  "base": "http://acme.trustroot.net",
+  "issuer": "/etc/acmed/issuer.pem",
+  "issuerKey": "/etc/acmed/issuer.key",
+  "days": 90,
+  "state": "/var/lib/acmed",
+  "tos": "http://acme.trustroot.net/terms"
+}

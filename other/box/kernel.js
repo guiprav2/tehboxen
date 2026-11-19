@@ -197,8 +197,29 @@ async function startNetwork() {
 
 /* ---------- init ---------- */
 
+/**
+ * The world's trust bundle (root computer: /world/pki/trust) as /etc/ssl/certs/ca-certificates.crt,
+ * refreshed at every boot so a new or rotated CA reaches every box.
+ */
+async function syncTrust() {
+  let pem = BOX === 'root' ? await (await import('./root.js')).rootOps['world.trust']() : await pageRpc('trust');
+  if (pem == null) return;
+  if ((await readText('/etc/ssl/certs/ca-certificates.crt')) !== pem) await writeText('/etc/ssl/certs/ca-certificates.crt', pem);
+}
+
+/** Root computer: /world/rc (world automation) as godshand, once the base system is in. */
+async function runWorldRc() {
+  if ((await readText('/world/rc')) == null) return;
+  await (await import('../packages.js')).ensureBaked();
+  let sh = await shellFor('godshand');
+  shells.push(sh);
+  sh.setBackgroundSink((text) => log(String(text).trimEnd()));
+  let r = await sh.run('sh /world/rc');
+  log(`/world/rc exited ${r.code}${r.code ? ': ' + (r.stderr || r.stdout || '').trim().slice(-800) : ''}`);
+}
+
 async function runRc() {
-  if (BOX === 'root') return;
+  if (BOX === 'root') return runWorldRc();
   let rc = await readText('/etc/rc');
   if (rc == null) return;
   let sh = await shellFor('root');
@@ -222,6 +243,7 @@ async function boot(msg) {
   import('../packages.js').then((m) => m.ensureBaked()).catch(() => {});
   await startNetwork();
   await runRc();
+  await syncTrust().catch((err) => log(`trust: ${err?.message || err}`));
   // Daemons started by rc get a few seconds to listen; then closed ports refuse again.
   if (stack) stack.bootGraceUntil = Date.now() + 5000;
   post({ t: 'up' });

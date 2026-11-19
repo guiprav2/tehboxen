@@ -1237,7 +1237,17 @@ export function createBuiltins(ctx) {
     }),
     stream: () => {
       let S = streamMod.Stream || streamMod.default?.Stream || class Stream extends EventEmitter {};
-      Object.assign(S, streamMod, { Stream: S, promises: get('stream/promises') });
+      // Copy the stream classes onto Stream (require('stream') is the Stream class itself), leaving
+      // getter-only accessors the class already has (its own `promises`) and defining ours.
+      for (let [k, v] of Object.entries({ ...streamMod, Stream: S })) {
+        let d = Object.getOwnPropertyDescriptor(S, k);
+        if (d && !d.writable && !d.set) {
+          if (!d.configurable) continue;
+        }
+        Object.defineProperty(S, k, { value: v, writable: true, configurable: true, enumerable: true });
+      }
+      let d = Object.getOwnPropertyDescriptor(S, 'promises');
+      if (!d || d.configurable) Object.defineProperty(S, 'promises', { get: () => get('stream/promises'), configurable: true, enumerable: true });
       return S;
     },
     'stream/promises': () => ({
@@ -1308,7 +1318,7 @@ export function createBuiltins(ctx) {
     http: () => netMods().http,
     https: () => netMods().https,
     http2: () => stubModule('http2', ['createServer', 'createSecureServer', 'connect']),
-    tls: () => stubModule('tls', ['createServer', 'connect', 'createSecureContext']),
+    tls: () => netMods().tls,
     dgram: () => netMods().dgram,
     dns: () => netMods().dns,
     'dns/promises': () => netMods()['dns/promises'],

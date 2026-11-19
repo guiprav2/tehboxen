@@ -1,0 +1,4 @@
+#!/bin/sh
+# acmed: TrustRoot's ACME directory on :80 (/etc/acmed.json).
+mkdir -p /var/lib/acmed
+node /usr/sbin/acmed /etc/acmed.json >> /var/log/acmed.log 2>&1 &

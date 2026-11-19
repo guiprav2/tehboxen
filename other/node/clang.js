@@ -732,7 +732,7 @@ export async function runTool(o) {
   // libtehboxen: declarations on every compile, the library on every link (see loadLibTehboxen).
   if (usr.tehboxen && !args.some((a) => a === '-nostdinc' || a === '-ffreestanding')) args.unshift('-include', '/usr/tehboxen/compat.h', '-idirafter', '/usr/tehboxen/include');
   if (usr.tehboxen && !compileOnly && !args.some((a) => a === '-nostdlib' || a === '-nodefaultlibs')) {
-    args.push(`-L/usr/tehboxen/lib/${wantsThreads ? 'wasm32-wasip1-threads' : 'wasm32-wasip1'}`, '-Wl,--export=__tehboxen_init', '-Wl,--wrap=stat,--wrap=lstat,--wrap=fstat,--wrap=fstatat,--wrap=getsockopt,--wrap=accept,--wrap=accept4,--wrap=ioctl,--wrap=dup,--wrap=dup2,--wrap=dup3,--wrap=chmod,--wrap=fchmod,--wrap=fchmodat', '-ltehboxen');
+    args.push(`-L/usr/tehboxen/lib/${wantsThreads ? 'wasm32-wasip1-threads' : 'wasm32-wasip1'}`, '-Wl,--export=__tehboxen_init', '-Wl,--wrap=stat,--wrap=lstat,--wrap=fstat,--wrap=fstatat,--wrap=getsockopt,--wrap=accept,--wrap=accept4,--wrap=ioctl,--wrap=dup,--wrap=dup2,--wrap=dup3,--wrap=chmod,--wrap=fchmod,--wrap=fchmodat,--wrap=send', '-ltehboxen');
   }
   // Informational invocations and -### itself run in one step, no jobs.
   if (!args.length || args.some((a) => /^(-###|--version|--help|-help|--help-hidden|-dumpversion|-dumpmachine|-print-[\w-]+(=.*)?)$/.test(a))) {

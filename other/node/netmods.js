@@ -3,11 +3,12 @@
  * network (other/net/procnet.js syscalls): sockets reach other boxes through
  * the fabric, never the real Internet.
  *
- * https is plain HTTP on port 443 for now (no TLS layer in the simulation).
+ * https is HTTP over real TLS (other/node/tls.js: OpenSSL in wasm, over these sockets).
  */
 import { Buffer } from 'https://cdn.jsdelivr.net/npm/buffer@6.0.3/+esm';
 import eventsMod from 'https://cdn.jsdelivr.net/npm/events@3.3.0/+esm';
 import * as streamMod from 'https://cdn.jsdelivr.net/npm/readable-stream@4.7.0/+esm';
+import { createTls } from './tls.js';
 
 let EventEmitter = eventsMod.EventEmitter || eventsMod;
 let Duplex = streamMod.Duplex;
@@ -538,9 +539,11 @@ export function createNetModules(k) {
 
   /* ---------- http ---------- */
   let http = createHttp(net);
-  let https = { ...createHttp(net, 443), Agent: http.Agent, globalAgent: http.globalAgent };
+  let readFile = (p) => new TextDecoder().decode(new Uint8Array(k.sys.sync('readFile', { path: p })));
+  let { tls, httpsTransport } = createTls({ net, readFile, ref: k.ref });
+  let https = { ...createHttp(httpsTransport, 443), Agent: http.Agent, globalAgent: http.globalAgent };
 
-  return { net, dgram, dns, 'dns/promises': promises, http, https };
+  return { net, dgram, dns, 'dns/promises': promises, http, https, tls };
 }
 
 /* ---------- HTTP/1.1 over net ---------- */
@@ -865,7 +868,11 @@ function createHttp(net, defaultPort = 80) {
       if (!this.hasHeader('host')) this.setHeader('Host', this.port === defaultPort ? this.host : `${this.host}:${this.port}`);
       if (!this.hasHeader('connection')) this.setHeader('Connection', 'close');
       if (cb) this.once('response', cb);
-      let sock = net.connect({ host: this.host, port: this.port, localAddress: opts.localAddress, timeout: opts.timeout });
+      // TLS options ride along for https (ignored by plain net.connect).
+      let tlsOpts = {};
+      for (let k2 of ['ca', 'cert', 'key', 'rejectUnauthorized', 'servername', 'checkServerIdentity', 'ALPNProtocols', 'secureContext']) if (opts[k2] !== undefined) tlsOpts[k2] = opts[k2];
+      if (opts.agent?.options) for (let k2 of ['ca', 'rejectUnauthorized']) if (tlsOpts[k2] === undefined && opts.agent.options[k2] !== undefined) tlsOpts[k2] = opts.agent.options[k2];
+      let sock = net.connect({ ...tlsOpts, host: this.host, port: this.port, localAddress: opts.localAddress, timeout: opts.timeout });
       this._sock = this.socket = this.connection = sock;
       sock.on('connect', () => this.emit('socket', sock));
       sock.on('error', (err) => this.emit('error', err));

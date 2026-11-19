@@ -87,6 +87,7 @@ async function boot() {
     }
   }
   setLocalNet({ stack, hostname, boxId: 'local', readFile: readText });
+  await syncLocalTrust(root);
   if ((await readText('/etc/hosts')) == null) await writeRoot('/etc/hosts', `127.0.0.1\tlocalhost\n127.0.1.1\t${hostname}\n`);
   // Routers first (DHCP needs them), every other box boots in the background.
   let built = fabric.build(world);
@@ -105,9 +106,20 @@ async function boot() {
   await built;
 }
 
+/** The world's trust bundle as this machine's /etc/ssl/certs/ca-certificates.crt. */
+async function syncLocalTrust(root) {
+  try {
+    let pem = await root.rpc('world.trust');
+    if (pem != null && (await readText('/etc/ssl/certs/ca-certificates.crt')) !== pem) await writeRoot('/etc/ssl/certs/ca-certificates.crt', pem);
+  } catch (err) {
+    console.warn('[net] trust:', err.message);
+  }
+}
+
 /** Re-read /world from the root computer and apply it (new/changed/removed boxes, routers). */
 export async function applyWorld() {
   if (!fabric) throw new Error('the world is not running in this tab');
+  await syncLocalTrust(fabric.boxes.get('root'));
   let world = await fabric.boxes.get('root').rpc('world.read');
   await fabric.build(world);
   return listBoxes();

@@ -352,6 +352,10 @@ let pageOps = {
     let root = box.fabric.boxes.get('root');
     return root.rpc('world.image', { name });
   },
+  /** The world's trust bundle (/world/pki/trust). */
+  async trust(box) {
+    return box.fabric.boxes.get('root').rpc('world.trust');
+  },
   async saveLease(box, { ifname, ip }) {
     box.spec.lastLease = { ...(box.spec.lastLease || {}), [ifname]: ip };
     let root = box.fabric.boxes.get('root');

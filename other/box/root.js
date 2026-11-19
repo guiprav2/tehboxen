@@ -9,6 +9,8 @@
  *   /world/images/<name>/image.yaml     image manifest (from, packages, users, groups)
  *   /world/images/<name>/rootfs/…       files copied into new boxes
  *   /world/state/                       runtime state the fabric persists (DHCP leases)
+ *   /world/rc, /world/rc.d/*            world automation: run as godshand at every root boot
+ *   /world/pki/trust/*.pem              trust anchors: every box's /etc/ssl/certs/ca-certificates.crt
  *
  * The repo's world-seed/ is only the generic infrastructure a fresh world
  * starts with (the Internet, public DNS, a home LAN); world packs and the
@@ -131,6 +133,16 @@ export let rootOps = {
       out.groups.push(...(manifest.groups || []));
       let modes = manifest.modes || {};
       let owners = manifest.owners || {};
+      // world_files: { /box/path: world-relative path } — secrets and generated material (CA
+      // keys…) the image takes from /world when a box is provisioned. Missing → provisioning
+      // fails (and is retried next boot) rather than leaving a half-made box.
+      for (let [dest, src] of Object.entries(manifest.world_files || {})) {
+        let rel = String(dest).replace(/^\/+/, '');
+        let data = await readBytes('world/' + String(src).replace(/^\/+/, '')).catch(() => null);
+        if (data == null) throw new Error(`${n}/image.yaml: world_files ${dest}: /world/${src} doesn't exist (yet)`);
+        let [owner, group] = String(owners['/' + rel] || '').split(':');
+        files.set(rel, { path: rel, data, mode: modes['/' + rel] != null ? parseInt(modes['/' + rel], 8) : 0o600, owner: owner || 0, group: group || owner || 0 });
+      }
       let prefix = `world/images/${n}/rootfs/`;
       for (let p of await listUnder(prefix)) {
         let rel = p.slice(prefix.length);
@@ -140,6 +152,17 @@ export let rootOps = {
       }
     }
     out.files = [...files.values()];
+    return out;
+  },
+
+  /** The world's trust bundle: every /world/pki/trust/*.pem, concatenated (sorted by name). */
+  async 'world.trust'() {
+    let out = '';
+    for (let p of await listUnder('world/pki/trust/')) {
+      if (!/\.(pem|crt)$/.test(p)) continue;
+      let t = String((await readText(p)) || '').trim();
+      if (t) out += `# ${p.slice('world/pki/trust/'.length)}\n${t}\n`;
+    }
     return out;
   },
 

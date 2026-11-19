@@ -1,0 +1,43 @@
+diff --git a/uacme.c b/uacme.c
+index b3eb7cc..e77c539 100644
+--- a/uacme.c
++++ b/uacme.c
+@@ -350,6 +350,30 @@ int hook_run(const char *prog, const char *method, const char *type,
+         const char *ident, const char *token, const char *auth)
+ {
+     int ret = -1;
++#ifdef __wasi__
++    /* No fork: run the hook through the shell with the UACME_* variables in its
++     * environment (libtehboxen passes the changed environment on). */
++    char *const argv[] = { (char *)prog, (char *)method, (char *)type,
++        (char *)ident, (char *)token, (char *)auth, NULL };
++    setenv("UACME_METHOD", method, 1);
++    setenv("UACME_TYPE", type, 1);
++    setenv("UACME_IDENT", ident, 1);
++    setenv("UACME_TOKEN", token, 1);
++    setenv("UACME_AUTH", auth, 1);
++    int status = tehboxen_run_argv(argv);
++    unsetenv("UACME_METHOD");
++    unsetenv("UACME_TYPE");
++    unsetenv("UACME_IDENT");
++    unsetenv("UACME_TOKEN");
++    unsetenv("UACME_AUTH");
++    if (status < 0)
++        warn("hook_run: failed to execute %s", prog);
++    else if (WIFEXITED(status))
++        ret = WEXITSTATUS(status);
++    else
++        warnx("hook_run: %s terminated abnormally", prog);
++    return ret;
++#else
+     pid_t pid = fork();
+     if (pid < 0)
+         warn("hook_run: fork failed");
+@@ -374,6 +398,7 @@ int hook_run(const char *prog, const char *method, const char *type,
+         }
+     }
+     return ret;
++#endif
+ }
+ 
+ bool check_or_mkdir(bool allow_create, const char *dir, mode_t mode)

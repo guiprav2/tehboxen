@@ -13,6 +13,9 @@ recreates our patched fork from the pinned commit + `patches/`.
 | `busybox/` | `toolchain/busybox/busybox-1.37.0-wasm32-wasip1.tgz` | base system (baked): coreutils-ish applets, tar, net tools |
 | `xz/` | `toolchain/xz/xz-5.8.4-wasm32-wasip1.tgz` | base system (baked): xz/unxz/xzcat/lzma, `tar cJf` |
 | `zip/`, `unzip/` | `toolchain/{zip,unzip}/…-wasm32-wasip1.tgz` | base system (baked): Info-ZIP, Debian-patched (`infozip-*.sh`) |
+| `openssl/`, `wget/`, `curl/` | `toolchain/{openssl,wget,curl}/…` | base system (baked): TLS, CA tooling, HTTPS clients |
+| `tlsshim/` | `toolchain/tls/tlsshim.wasm` | the node runtime's `tls`/`https` (libssl over memory BIOs) |
+| `uacme/` | `toolchain/uacme/uacme-1.8.1-wasm32-wasip1.tgz` | the `uacme` ACME client package |
 | `nmap/` | `toolchain/nmap/nmap-7.993-wasm32-wasip1.tgz` | the `nmap` package (`sudo pkg install nmap`) |
 
 ```sh

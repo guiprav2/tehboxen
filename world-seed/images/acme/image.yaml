@@ -1,0 +1,12 @@
+# TrustRoot's ACME server (RFC 8555, http-01): issues 90-day certificates from the R1 CA.
+from: base
+version: 1
+packages: [nodejs]
+world_files:
+  /etc/acmed/issuer.key: pki/private/trustroot-r1.key
+  /etc/acmed/issuer.pem: pki/issuers/trustroot-r1.pem
+modes:
+  /usr/sbin/acmed: "755"
+  /etc/rc.d/acmed: "755"
+  /etc/acmed/issuer.key: "600"
+  /etc/acmed/issuer.pem: "644"

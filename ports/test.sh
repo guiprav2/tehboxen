@@ -69,5 +69,31 @@ if want zip || want unzip; then
   check unzip:encrypted "2000" "$($RUN "$UNZIP" unzip -P s3cret -p "$T/e.zip" | tail -1)"
 fi
 
+if want openssl; then
+  OSSL="$RUN $WORK/openssl/apps/openssl openssl"
+  check openssl:sha256 "$(printf abc | sha256sum | cut -d' ' -f1)" "$(printf abc | $OSSL dgst -sha256 | sed 's/.*= //')"
+  printf '[req]\ndistinguished_name=dn\n[dn]\n[ca]\nbasicConstraints=critical,CA:true\nkeyUsage=critical,keyCertSign\n' > "$T/min.cnf"
+  $OSSL req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$T/ca.key" -out "$T/ca.crt" -subj /CN=T -days 9 -config "$T/min.cnf" -extensions ca 2>/dev/null
+  $OSSL req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$T/l.key" -out "$T/l.csr" -subj /CN=l -config "$T/min.cnf" 2>/dev/null
+  $OSSL x509 -req -in "$T/l.csr" -CA "$T/ca.crt" -CAkey "$T/ca.key" -days 9 -out "$T/l.crt" 2>/dev/null
+  # The host's openssl accepts what ours issued.
+  check openssl:ca-issue "l.crt: OK" "$(openssl verify -CAfile ca.crt l.crt 2>&1)"
+fi
+
+if want wget; then
+  check wget:version "GNU Wget 1.25.0 built on wasi." "$($RUN "$WORK/wget/src/wget" wget --version | head -1)"
+  check wget:https "+https" "$($RUN "$WORK/wget/src/wget" wget --version | grep -o '+https')"
+fi
+
+if want curl; then
+  check curl:openssl "OpenSSL/3.5.9" "$($RUN "$WORK/curl/src/curl" curl --version | head -1 | grep -o 'OpenSSL/[0-9.]*')"
+  echo filedata > "$T/c.txt"
+  check curl:file "filedata" "$($RUN "$WORK/curl/src/curl" curl -s "file://$T/c.txt")"
+fi
+
+if want uacme; then
+  check uacme:version "uacme: version 1.8.1" "$($RUN "$WORK/uacme/uacme" uacme -V 2>&1 | head -1)"
+fi
+
 echo "ports/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

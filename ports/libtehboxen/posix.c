@@ -791,3 +791,56 @@ FILE *tmpfile(void) {
   if (!f) close(fd);
   return f;
 }
+
+/* ---------- <err.h>: wasi-libc declares warn/err & co. but doesn't build them ----------
+ * Weak, like libc's: programs that define their own (uacme's msg.c) win. */
+
+#include <stdarg.h>
+extern char *__progname;
+static void err_prefix(void) {
+  if (__progname && *__progname) fprintf(stderr, "%s: ", __progname);
+}
+__attribute__((weak)) void vwarn(const char *fmt, va_list ap) {
+  int e = errno;
+  err_prefix();
+  if (fmt) {
+    vfprintf(stderr, fmt, ap);
+    fputs(": ", stderr);
+  }
+  fprintf(stderr, "%s\n", strerror(e));
+}
+__attribute__((weak)) void vwarnx(const char *fmt, va_list ap) {
+  err_prefix();
+  if (fmt) vfprintf(stderr, fmt, ap);
+  fputc('\n', stderr);
+}
+__attribute__((weak)) void warn(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vwarn(fmt, ap);
+  va_end(ap);
+}
+__attribute__((weak)) void warnx(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vwarnx(fmt, ap);
+  va_end(ap);
+}
+__attribute__((weak)) _Noreturn void verr(int status, const char *fmt, va_list ap) {
+  vwarn(fmt, ap);
+  exit(status);
+}
+__attribute__((weak)) _Noreturn void verrx(int status, const char *fmt, va_list ap) {
+  vwarnx(fmt, ap);
+  exit(status);
+}
+__attribute__((weak)) _Noreturn void err(int status, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  verr(status, fmt, ap);
+}
+__attribute__((weak)) _Noreturn void errx(int status, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  verrx(status, fmt, ap);
+}

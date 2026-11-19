@@ -1,0 +1,6 @@
+# TrustRoot's ACME server: free, automated 90-day certificates for any domain you control.
+image: acme
+hostname: acme.trustroot.net
+interfaces:
+  - { name: eth0, segment: internet, addr: 23.51.7.20/32, onlink: true }
+dns: [8.8.8.8]

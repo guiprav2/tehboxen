@@ -1,0 +1,8 @@
+#!/bin/sh
+# World automation: the root computer runs this as godshand at every boot, after the base
+# system (openssl, busybox…) is installed. Each /world/rc.d/* script must be idempotent.
+for s in /world/rc.d/*; do
+  if [ -x "$s" ]; then
+    "$s"
+  fi
+done

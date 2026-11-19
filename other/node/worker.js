@@ -404,6 +404,26 @@ async function main(init) {
     mapStack: (f) => (mapStack ? mapStack(f) : f),
     readText: (p) => String(nodeFs.fs.readFileSync(path.resolve(procCwd, p), 'utf8')),
   });
+  // WebCrypto work keeps the process alive, like libuv's threadpool does for node:crypto
+  // (an async main that awaits crypto.subtle would otherwise exit mid-flight).
+  {
+    let subtle = globalThis.crypto?.subtle;
+    let methods = ['encrypt', 'decrypt', 'sign', 'verify', 'digest', 'generateKey', 'deriveKey', 'deriveBits', 'importKey', 'exportKey', 'wrapKey', 'unwrapKey'];
+    if (subtle && !subtle.__tbRef) {
+      for (let m of methods) {
+        let orig = typeof subtle[m] === 'function' ? subtle[m].bind(subtle) : null;
+        if (!orig) continue;
+        Object.defineProperty(subtle, m, {
+          configurable: true,
+          value: (...a) => {
+            let release = rt.ref();
+            return Promise.resolve(orig(...a)).finally(release);
+          },
+        });
+      }
+      Object.defineProperty(subtle, '__tbRef', { value: true });
+    }
+  }
   if (opts.title) rt.process.title = opts.title;
   if (pendingSignal) rt.signal(pendingSignal);
 
