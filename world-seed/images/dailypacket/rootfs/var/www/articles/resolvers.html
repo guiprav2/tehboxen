@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Three resolvers answer for the whole net — The Daily Packet</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="mast" href="/">The Daily <span>Packet</span></a>
+      <div class="tagline">All the news that fits in a datagram</div>
+    </header>
+    <nav><a href="/">Front page</a><a href="/articles/trustroot.html">Security</a><a href="/articles/resolvers.html">Infrastructure</a><a href="/articles/routers.html">Your network</a><a href="/about.html">About</a></nav>
+    <main>
+      <article class="story">
+        <div class="kicker">Infrastructure</div>
+        <h1>Three resolvers answer for the whole net — is that a problem?</h1>
+        <p class="standfirst">Almost every name lookup on the net goes through 8.8.8.8, 1.1.1.1 or 9.9.9.9. All three recurse to a single registry.</p>
+        <div class="meta">Infrastructure desk</div>
+        <p>Type a name into a browser and the question usually travels the same way: your machine asks your router, your router forwards to one of the public resolvers, and the resolver asks <code>ns.registry.net</code>, the box that holds every public zone.</p>
+        <p>That keeps things simple. It also means a handful of machines see, and could answer for, every lookup on the net.</p>
+        <h2 id="opinion">Opinion: run your own resolver</h2>
+        <p>Your queries are a diary of where you go. Nothing stops you from pointing <code>/etc/resolv.conf</code> at a resolver you run yourself. The fewer people who can read the diary, the better.</p>
+      </article>
+    </main>
+    <footer>© The Daily Packet · Served over HTTPS by webd · Certificate by TrustRoot R1</footer>
+  </body>
+</html>

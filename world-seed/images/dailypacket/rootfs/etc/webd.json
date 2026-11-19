@@ -1,0 +1,6 @@
+{
+  "root": "/var/www",
+  "domains": ["dailypacket.net", "www.dailypacket.net"],
+  "acme": "https://acme.trustroot.net/directory",
+  "redirectToHttps": true
+}

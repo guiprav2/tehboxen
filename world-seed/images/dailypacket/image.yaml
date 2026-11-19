@@ -1,0 +1,4 @@
+# The Daily Packet (https://dailypacket.net): a news site on webd. To retire it, delete this
+# directory, boxes/news.yaml and dns-registry's dailypacket.net zone.
+from: webd
+version: 1

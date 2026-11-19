@@ -1,0 +1,6 @@
+# The Daily Packet: news from the wire (https://dailypacket.net).
+image: dailypacket
+hostname: www.dailypacket.net
+interfaces:
+  - { name: eth0, segment: internet, addr: 151.101.65.67/32, onlink: true }
+dns: [8.8.8.8]

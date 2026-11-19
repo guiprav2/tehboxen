@@ -1,0 +1,6 @@
+#!/bin/sh
+# webd: /var/www on :80 and, once its certificate exists, :443 (domains: /etc/webd.json).
+# webd-cert fetches the certificate in the background on first boot.
+mkdir -p /var/www/.well-known/acme-challenge /var/log
+node /usr/sbin/webd /etc/webd.json >> /var/log/webd.log 2>&1 &
+sh /usr/sbin/webd-cert >> /var/log/webd-cert.log 2>&1 &

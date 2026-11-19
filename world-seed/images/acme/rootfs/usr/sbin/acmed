@@ -5,6 +5,7 @@
 //   node /usr/sbin/acmed /etc/acmed.json
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
 const { execFile } = require('child_process');
 
 let cfg = JSON.parse(fs.readFileSync(process.argv[2] || '/etc/acmed.json', 'utf8'));
@@ -276,8 +277,7 @@ function send(res, status, obj, headers = {}) {
   res.end(JSON.stringify(obj, null, 1));
 }
 
-http
-  .createServer((req, res) => {
+function handler(req, res) {
     let path = req.url.split('?')[0];
     let body = '';
     req.setEncoding('utf8');
@@ -307,5 +307,12 @@ http
         res.end(JSON.stringify({ type: p.type, detail: p.message, status: p.status }));
       }
     });
-  })
-  .listen(cfg.listen || 80, () => log(`acmed: ${BASE}/directory (issuer ${cfg.issuer})`));
+}
+
+// HTTPS is the directory (RFC 8555 requires it); port 80 answers too, for curious humans.
+http.createServer(handler).listen(cfg.listen || 80, () => log(`acmed: http :${cfg.listen || 80}`));
+if (cfg.cert && fs.existsSync(cfg.cert)) {
+  https
+    .createServer({ cert: fs.readFileSync(cfg.cert), key: fs.readFileSync(cfg.key) }, handler)
+    .listen(cfg.httpsListen || 443, () => log(`acmed: ${BASE}/directory (issuer ${cfg.issuer})`));
+} else log(`acmed: no TLS certificate at ${cfg.cert}: HTTPS is off`);

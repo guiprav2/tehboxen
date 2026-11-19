@@ -1,0 +1,10 @@
+# A static web server: webd serves /var/www over HTTP and HTTPS and, on first boot, webd-cert gets
+# the site's certificate from TrustRoot over ACME (uacme). Sites build on it (`from: webd`) and
+# bring /etc/webd.json (their domains) and /var/www.
+from: base
+version: 1
+packages: [nodejs, uacme]
+modes:
+  /usr/sbin/webd: "755"
+  /usr/sbin/webd-cert: "755"
+  /etc/rc.d/webd: "755"

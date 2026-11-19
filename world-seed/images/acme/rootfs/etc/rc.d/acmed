@@ -1,4 +1,16 @@
 #!/bin/sh
-# acmed: TrustRoot's ACME directory on :80 (/etc/acmed.json).
-mkdir -p /var/lib/acmed
+# acmed: TrustRoot's ACME directory, https://acme.trustroot.net/directory (/etc/acmed.json).
+# Its own TLS certificate comes from itself: the box holds the R1 issuer, so on first boot it
+# signs one for acme.trustroot.net (825 days; delete /etc/acmed/tls/cert.pem to reissue).
+mkdir -p /var/lib/acmed /etc/acmed/tls
+C=/etc/acmed/tls
+if [ ! -f $C/cert.pem ]; then
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout $C/key.pem -out $C/req.csr \
+    -subj /CN=acme.trustroot.net > /dev/null 2>&1
+  printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:acme.trustroot.net,DNS:trustroot.net\n' > $C/ext.cnf
+  openssl x509 -req -in $C/req.csr -CA /etc/acmed/issuer.pem -CAkey /etc/acmed/issuer.key \
+    -set_serial 0x$(openssl rand -hex 12) -days 825 -extfile $C/ext.cnf -out $C/leaf.pem > /dev/null 2>&1
+  cat $C/leaf.pem /etc/acmed/issuer.pem > $C/cert.pem
+  chmod 600 $C/key.pem
+fi
 node /usr/sbin/acmed /etc/acmed.json >> /var/log/acmed.log 2>&1 &

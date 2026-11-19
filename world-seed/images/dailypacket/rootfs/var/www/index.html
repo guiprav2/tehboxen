@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Daily Packet — news from the wire</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="mast" href="/">The Daily <span>Packet</span></a>
+      <div class="tagline">All the news that fits in a datagram</div>
+    </header>
+    <nav><a href="/">Front page</a><a href="/articles/trustroot.html">Security</a><a href="/articles/resolvers.html">Infrastructure</a><a href="/articles/routers.html">Your network</a><a href="/about.html">About</a></nav>
+    <main>
+      <section class="lead">
+        <article>
+          <div class="kicker">Security</div>
+          <h2><a href="/articles/trustroot.html">TrustRoot hands out free certificates to anyone who can prove a domain is theirs</a></h2>
+          <p>The certificate authority behind most padlocks on the net now issues 90-day certificates in seconds over ACME, no forms and no fees. Critics call it a boon for phishers; fans call it overdue.</p>
+          <div class="byline">By the Daily Packet security desk</div>
+        </article>
+        <aside class="side">
+          <article>
+            <div class="kicker">Infrastructure</div>
+            <h3><a href="/articles/resolvers.html">Three resolvers answer for the whole net — is that a problem?</a></h3>
+            <p>8.8.8.8, 1.1.1.1 and 9.9.9.9 resolve nearly every name. All three ask the same registry.</p>
+          </article>
+          <article>
+            <div class="kicker">Your network</div>
+            <h3><a href="/articles/routers.html">What your home router knows about you</a></h3>
+            <p>Leases, logs and port forwards: a short tour of the box at 192.168.1.1.</p>
+          </article>
+        </aside>
+      </section>
+      <section class="grid">
+        <article>
+          <div class="kicker">How-to</div>
+          <h3><a href="/articles/trustroot.html#howto">Get a certificate in two commands</a></h3>
+          <p><code>uacme new</code>, then <code>uacme issue</code>. Your web server just has to answer on port 80.</p>
+        </article>
+        <article>
+          <div class="kicker">Opinion</div>
+          <h3><a href="/articles/resolvers.html#opinion">Run your own resolver. Please.</a></h3>
+          <p>Every lookup you make tells someone where you are going.</p>
+        </article>
+        <article>
+          <div class="kicker">Notice</div>
+          <h3><a href="/about.html">About this paper</a></h3>
+          <p>Who we are, and why our front page fits in a few kilobytes.</p>
+        </article>
+      </section>
+    </main>
+    <footer>© The Daily Packet · Served over HTTPS by webd · Certificate by TrustRoot R1</footer>
+  </body>
+</html>

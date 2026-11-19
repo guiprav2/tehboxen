@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Gloom.html</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <script>
+      // rootPrefix is the project's base URL, so the runtime loads from pages at any depth.
+      window.rootPrefix = /^\/(files|preview)\//.test(location.pathname)
+        ? location.pathname.split('/').slice(0, 4).join('/')
+        : '/';
+      for (let [src, module] of [
+        ['webfoundry/ifdesigner.js', true],
+        ['webfoundry/head.js', false],
+      ]) {
+        let s = document.createElement('script');
+        s.src = rootPrefix.replace(/\/$/, '') + '/' + src;
+        module ? (s.type = 'module') : (s.async = false);
+        document.head.append(s);
+      }
+    </script>
+  </head>
+  <body
+    class="flex flex-col [&amp;&gt;div:first-child]:flex-1 min-h-screen"
+    style="display: none"
+  >
+    <div
+      class="flex items-center justify-center min-h-[100dvh] p-8 bg-[#07100b]"
+    >
+      <div
+        id="Gloom"
+        class="flex flex-col overflow-hidden shadow-2xl shadow-sky-900/30 border border-white/40 bg-[#0d1117] text-zinc-200 w-[900px] h-[620px] shrink-0 rounded-3xl @container/app"
+        wf-class="{{this.win.frameClass}}"
+        wf-onclick="post('desktop.focusApp', this.winId)"
+        wf-onattach="post('desktop.registerWindow', this.winId)"
+      >
+        <div
+          class="h-10 shrink-0 flex items-center gap-2 px-3 bg-gradient-to-r from-sky-500 to-cyan-400 text-white cursor-grab active:cursor-grabbing"
+          wf-onpointerdown="post('desktop.startDrag', this.winId, event)"
+        >
+          <div class="size-6 rounded-md bg-zinc-900/20 flex items-center justify-center text-sm"><i class="nf nf-md-web"></i></div>
+          <div class="flex-1 text-sm font-semibold truncate">{{this.s.title || 'Gloom'}}</div>
+          <button class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden" wf-onclick="(event.stopPropagation(), post('desktop.minimizeApp', this.winId))" wf-onpointerdown="event.stopPropagation()" title="Minimize"><i class="nf text-xs nf-cod-chrome_minimize"></i></button>
+          <button class="size-7 rounded-full hover:bg-zinc-900/20 flex items-center justify-center max-md:hidden" wf-onclick="(event.stopPropagation(), post('desktop.toggleMaximize', this.winId))" wf-onpointerdown="event.stopPropagation()" title="Maximize"><i class="nf text-xs nf-cod-chrome_maximize"></i></button>
+          <button class="size-7 rounded-full hover:bg-red-500/80 flex items-center justify-center max-md:hidden" wf-onclick="(event.stopPropagation(), post('desktop.closeApp', this.winId))" wf-onpointerdown="event.stopPropagation()" title="Close"><i class="nf nf-md-close text-xs"></i></button>
+        </div>
+        <div class="flex items-center gap-1.5 px-2 py-1.5 border-b border-sky-900 bg-zinc-900/80">
+          <button class="size-8 rounded-full hover:bg-zinc-800 flex items-center justify-center disabled:opacity-30" wf-disabled="this.s.index &lt;= 0" wf-onclick="this.post('back')" title="Back"><i class="nf nf-md-arrow_left"></i></button>
+          <button class="size-8 rounded-full hover:bg-zinc-800 flex items-center justify-center disabled:opacity-30" wf-disabled="this.s.index &gt;= this.s.history.length - 1" wf-onclick="this.post('forward')" title="Forward"><i class="nf nf-md-arrow_right"></i></button>
+          <button class="size-8 rounded-full hover:bg-zinc-800 flex items-center justify-center" wf-onclick="this.post(this.s.loading ? 'stop' : 'reload')" title="Reload / stop"><i class="nf" wf-class="{{this.s.loading ? 'nf-md-close' : 'nf-md-refresh'}}"></i></button>
+          <div class="flex-1 flex items-center gap-2 rounded-full bg-zinc-800 border border-zinc-700 focus-within:border-sky-500 px-3 h-8 min-w-0">
+            <i class="nf text-sm" wf-class="{{this.s.url ? (this.s.secure ? 'nf-md-lock text-emerald-400' : 'nf-md-lock_open_alert text-amber-400') : 'nf-md-magnify text-zinc-500'}}"></i>
+            <span class="text-[11px] text-amber-400 shrink-0" wf-if="this.s.url &amp;&amp; !this.s.secure">Not secure</span>
+            <input class="flex-1 min-w-0 bg-transparent outline-none text-sm" placeholder="Search or type an in-world address" wf-value="this.s.address" wf-onkeydown="this.post('keydown', event)" spellcheck="false" />
+          </div>
+        </div>
+        <div class="h-0.5 shrink-0 relative overflow-hidden bg-zinc-900">
+            <div class="absolute inset-0 bg-sky-400 animate-pulse" wf-if="this.s.loading"></div>
+          </div>
+          <div class="flex-1 min-h-0 relative bg-white">
+          <iframe class="absolute inset-0 w-full h-full border-0 bg-white" wf-onattach="this.post('attachFrame', _1)" wf-ondetach="this.post('detachFrame', _1)" wf-onload="this.post('frameLoaded')" allow="clipboard-write" title="Web page"></iframe>
+          <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#0d1117] text-zinc-400" wf-if="!this.s.url">
+            <i class="nf nf-md-web text-6xl text-sky-400"></i>
+            <div class="text-sm">Type an address — the web here is the world's own.</div>
+          </div>
+        </div>
+        <div class="absolute right-0 bottom-0 size-4 cursor-se-resize max-md:hidden" wf-onpointerdown="post('desktop.startResize', this.winId, 'se', event)"></div>
+        <div class="absolute top-10 right-0 bottom-4 w-1.5 cursor-e-resize z-10 max-md:hidden" wf-onpointerdown="post('desktop.startResize', this.winId, 'e', event)"></div>
+        <div class="absolute left-0 right-4 bottom-0 h-1.5 cursor-s-resize z-10 max-md:hidden" wf-onpointerdown="post('desktop.startResize', this.winId, 's', event)"></div>
+      </div>
+    </div>
+  </body>
+</html>

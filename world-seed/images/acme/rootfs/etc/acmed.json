@@ -1,9 +1,12 @@
 {
   "listen": 80,
-  "base": "http://acme.trustroot.net",
+  "httpsListen": 443,
+  "cert": "/etc/acmed/tls/cert.pem",
+  "key": "/etc/acmed/tls/key.pem",
+  "base": "https://acme.trustroot.net",
   "issuer": "/etc/acmed/issuer.pem",
   "issuerKey": "/etc/acmed/issuer.key",
   "days": 90,
   "state": "/var/lib/acmed",
-  "tos": "http://acme.trustroot.net/terms"
+  "tos": "https://acme.trustroot.net/terms"
 }

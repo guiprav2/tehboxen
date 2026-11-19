@@ -1,0 +1,19 @@
+#!/bin/sh
+# First boot: get this site's certificate (every domain in /etc/webd.json) from the ACME CA there
+# (http-01, served by webd from /var/www/.well-known/acme-challenge). Retries until the CA
+# answers; does nothing once the certificate exists.
+NAMES=$(node -e "console.log(require('/etc/webd.json').domains.join(' '))")
+FIRST=$(node -e "console.log(require('/etc/webd.json').domains[0])")
+ACME=$(node -e "console.log(require('/etc/webd.json').acme || 'https://acme.trustroot.net/directory')")
+if [ -f /etc/ssl/uacme/$FIRST/cert.pem ]; then
+  exit 0
+fi
+for i in $(seq 1 90); do
+  uacme -y -a $ACME new > /dev/null 2>&1
+  if uacme -a $ACME -h /usr/share/uacme/uacme.sh issue $NAMES; then
+    echo "webd-cert: certificate for $NAMES issued"
+    exit 0
+  fi
+  sleep 10
+done
+echo "webd-cert: gave up"

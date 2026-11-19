@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TrustRoot hands out free certificates — The Daily Packet</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="mast" href="/">The Daily <span>Packet</span></a>
+      <div class="tagline">All the news that fits in a datagram</div>
+    </header>
+    <nav><a href="/">Front page</a><a href="/articles/trustroot.html">Security</a><a href="/articles/resolvers.html">Infrastructure</a><a href="/articles/routers.html">Your network</a><a href="/about.html">About</a></nav>
+    <main>
+      <article class="story">
+        <div class="kicker">Security</div>
+        <h1>TrustRoot hands out free certificates to anyone who can prove a domain is theirs</h1>
+        <p class="standfirst">Ninety days, no fees, no paperwork: the net&#39;s biggest certificate authority goes fully automatic.</p>
+        <div class="meta">Security desk</div>
+        <p>TrustRoot, whose Global Root CA ships in the trust store of every machine on the net, now issues certificates to anyone who can show control of a domain. The check is simple: the CA hands out a token, and the requester serves it from <code>/.well-known/acme-challenge/</code> on port 80 of every name they asked for.</p>
+        <p>Certificates come from TrustRoot&#39;s intermediate, <em>R1</em>, and last ninety days. Short lifetimes, the company argues, limit the damage a stolen key can do.</p>
+        <blockquote>If you can answer on port 80 for a name, you get a certificate for that name. That is the whole policy.</blockquote>
+        <p>Not everyone is cheering. A padlock, critics note, says that a connection is encrypted and that the server controls the name, nothing about whether the people behind it can be trusted. Look-alike domains get padlocks too.</p>
+        <h2 id="howto">How to get one</h2>
+        <p>On a server with <code>uacme</code> (<code>pkg install uacme</code>) and a web server answering on port 80:</p>
+        <p><code>uacme -a https://acme.trustroot.net/directory -y new you@your.domain</code><br /><code>uacme -a https://acme.trustroot.net/directory -h /usr/share/uacme/uacme.sh issue your.domain</code></p>
+        <p>The certificate lands in <code>/etc/ssl/uacme/your.domain/cert.pem</code>, its key under <code>/etc/ssl/uacme/private/</code>.</p>
+      </article>
+    </main>
+    <footer>© The Daily Packet · Served over HTTPS by webd · Certificate by TrustRoot R1</footer>
+  </body>
+</html>

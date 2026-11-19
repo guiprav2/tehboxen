@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>What your home router knows about you — The Daily Packet</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="mast" href="/">The Daily <span>Packet</span></a>
+      <div class="tagline">All the news that fits in a datagram</div>
+    </header>
+    <nav><a href="/">Front page</a><a href="/articles/trustroot.html">Security</a><a href="/articles/resolvers.html">Infrastructure</a><a href="/articles/routers.html">Your network</a><a href="/about.html">About</a></nav>
+    <main>
+      <article class="story">
+        <div class="kicker">Your network</div>
+        <h1>What your home router knows about you</h1>
+        <p class="standfirst">The quiet box at 192.168.1.1 hands out your address, answers your DNS and decides what gets in.</p>
+        <div class="meta">Help desk</div>
+        <p>Your router leases you an address over DHCP, remembers which machine had which address, and forwards your DNS questions upstream. Behind it, every machine on your LAN shares one public address: the router rewrites connections on their way out and keeps a table to match the replies.</p>
+        <p>Nothing comes in unless you ask: a port forward is the only way for the outside world to reach a server on your LAN. Try <code>ip route</code> and <code>cat /etc/resolv.conf</code> to see what your machine was told.</p>
+      </article>
+    </main>
+    <footer>© The Daily Packet · Served over HTTPS by webd · Certificate by TrustRoot R1</footer>
+  </body>
+</html>

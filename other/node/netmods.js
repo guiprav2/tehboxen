@@ -29,11 +29,14 @@ function netErr(err, extra = {}) {
  */
 export function createNetModules(k) {
   let handlers = new Map(); // sid → (ev) => void
-  self.addEventListener('message', (ev) => {
-    let m = ev.data;
+  // Socket events: pushed by the page into this worker, or (k.subscribe) delivered directly when
+  // these modules run on the page itself (the web browser's engine, other/web/engine.js).
+  let onNetEv = (m) => {
     if (!m || m.t !== 'net-ev') return;
     handlers.get(m.sid)?.(m);
-  });
+  };
+  if (k.subscribe) k.subscribe(onNetEv);
+  else self.addEventListener('message', (ev) => onNetEv(ev.data));
   // A pending syscall keeps the process alive (like a pending libuv request).
   let call = async (op, args) => {
     let release = k.ref();
@@ -539,7 +542,7 @@ export function createNetModules(k) {
 
   /* ---------- http ---------- */
   let http = createHttp(net);
-  let readFile = (p) => new TextDecoder().decode(new Uint8Array(k.sys.sync('readFile', { path: p })));
+  let readFile = k.readFile || ((p) => new TextDecoder().decode(new Uint8Array(k.sys.sync('readFile', { path: p }))));
   let { tls, httpsTransport } = createTls({ net, readFile, ref: k.ref });
   let https = { ...createHttp(httpsTransport, 443), Agent: http.Agent, globalAgent: http.globalAgent };
 
