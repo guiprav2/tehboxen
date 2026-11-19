@@ -622,6 +622,24 @@ other/issues.js edit <id>
 * C++ exceptions are on by default for clang++ (and with -fexceptions for clang). YoWASP's sysroot has no EH runtime, so those builds use Holepunch's wasi-sdk-style sysroot (npm `wasi-sysroot-wasm32-wasip1`, libc++ 23 with eh/ libc++, libc++abi, libunwind), fetched as its npm tarball and mounted read-only at guest /opt/wasi-sysroot, with `-fwasm-exceptions -mllvm -wasm-use-legacy-eh=false` (standard exnref EH) plus explicit eh/ include and lib paths (clang 22 doesn't pick the multilib itself). `-fno-exceptions` uses YoWASP's sysroot. Needs a browser with Wasm exnref (Firefox 131+, Chrome 137+). Uncaught exceptions print libc++abi's message and exit 134.
 * First run downloads ~104 MB (progress on stderr); the page then keeps the compiled modules and resource tarball, so later tool runs start in about a second. Outputs are WASI preview1 binaries: run them with `./prog`.
 
+## Tehboxen: cross-origin isolation in every browser
+
+* `_headers` (COOP same-origin + COEP credentialless) isolates Chrome and desktop Firefox. Browsers without credentialless (Safari/all iOS browsers, Firefox for Android) get isolated by `coi-sw.js`: other/session.js registers it when the page isn't isolated (never inside Webfoundry previews) and reloads once; it adds COOP + COEP require-corp + CORP to same-origin responses and retries cross-origin no-cors loads as CORS.
+* Workers must be started with `spawnModuleWorker(url)` (other/node/spawn-worker.js): a blob module that imports the script, so the worker inherits the page's service worker/COEP; plain URL workers get their imports refused under coi-sw.js on WebKit.
+
+## Tehboxen: packages (`pkg`) and ports
+
+* `sudo pkg install vim git clang nodejs npm` (other/pkg.js on other/packages.js): nothing is installed by default. `depends` installs dependencies first (npm → nodejs) and `pkg remove` takes installed dependents along. pkg commands accept unambiguous prefixes plus aliases (`pkg i`, `rm`, `ls`, `show`). node/nodejs/npm/npx and node scripts (shebang or .js) need their packages; WASI programs and the clang tools still run in node workers without them. Packages unpack into the VFS as root (writeMany in parallel batches) with progress bars; `/var/lib/pkg/<name>` holds the version + file list (`pkg list|info|search|remove`). Bump a package's `version` to make boxes reinstall it.
+* Running a known command whose package isn't installed prints Ubuntu-style `Command 'vim' not found, but can be installed with: sudo pkg install vim` (exit 127). `git` and the clang toolchain names are gated on their packages; `pkg install clang` prefetches + compiles the YoWASP toolchain on the page and hands the modules to node workers.
+* vim/vi/view/ex/vimdiff/rvim/xxd: `/usr/local/bin`, runtime in `/usr/local/share/vim/vim92`; aliases are small sh scripts (our runner doesn't pass argv[0]).
+* Host-built WASI artifacts live in `toolchain/`; their recipes in `ports/` (pinned upstream commit + `patches/` + fetch/build/package scripts; `sh ports/build-all.sh`, work dir `.ports-work/`). Never vendor upstream trees; keep our changes as patches there.
+* VFS reads/removes need an explicit lease (`vfs.withLock(path, (lease) => vfs.read(path, { lease }), { mode: 'r' })`); errors from a missing lease look like "file not found" if swallowed.
+
+## Tehboxen: terminal for WASI programs
+
+* With a terminal and no piped stdin, a node/WASI process's stdin is the Terminal: `ttyRead`/`ttyPoll`/`ttyMode`/`ttySize` syscalls go to the bash session's line discipline (other/bash.js `attachProcess`): cooked (echo, line editing, Ctrl-D EOF) or raw; Ctrl-C is SIGINT only with ISIG; OPOST off disables newline translation. `isatty()` works (no seek rights on tty stdio); LINES/COLUMNS are exported for programs without TIOCGWINSZ.
+* libtehboxen adds `<termios.h>`, `<pwd.h>`/`<grp.h>` (from /etc/passwd, /etc/group), getuid & co. (`tehboxen.ids`), fork/exec/waitpid that fail like a fork-less system, umask/kill, and wraps `stat`/`lstat`/`fstat`/`fstatat` (`--wrap`, added by the driver) so modes and owners come from the VFS (`tehboxen.owner`/`fd_owner`); WASI filestat has neither.
+
 ## Tehboxen: threads, bash, libtehboxen
 
 * `-pthread` builds target wasm32-wasip1-threads against toolchain/wasi-threads-sysroot-34.tgz (wasi-sdk 34's threads sysroot + builtins, repackaged: GitHub assets have no CORS), mounted at guest /opt/wasi-threads; linked with shared, imported memory (max 1 GiB).

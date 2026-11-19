@@ -1,0 +1,234 @@
+diff --git a/src/os_unix.c b/src/os_unix.c
+index b41a8d6b5..410f9ee59 100644
+--- a/src/os_unix.c
++++ b/src/os_unix.c
+@@ -4407,6 +4407,12 @@ mch_get_shellsize(void)
+     void
+ mch_calc_cell_size(struct cellsize *cs_out)
+ {
++#  ifndef TIOCGWINSZ
++   // WASI (Tehboxen): no TIOCGWINSZ, so the cell size is unknown.
++   cs_out->cs_xpixel = -1;
++   cs_out->cs_ypixel = -1;
++}
++#  else
+    struct winsize   ws;
+    int		    retval;
+    int		    x_cell_size;
+@@ -4444,6 +4450,7 @@ mch_calc_cell_size(struct cellsize *cs_out)
+        out_flush();
+    }
+ }
++#  endif // TIOCGWINSZ
+ # endif
+ 
+ # if defined(FEAT_TERMINAL)
+@@ -4497,7 +4504,9 @@ mch_set_shellsize(void)
+ 	 * undefined, check the output of configure.  It could probably not
+ 	 * find a ncurses, termcap or termlib library.
+ 	 */
++#ifdef HAVE_TGETENT
+ 	term_set_winsize((int)Rows, (int)Columns);
++#endif
+ 	out_flush();
+ 	screen_start();			// don't know where cursor is now
+     }
+@@ -8802,7 +8811,32 @@ xsmp_close(void)
+ #endif // USE_XSMP
+ 
+ #if defined(FEAT_RELTIME)
+-# if defined(PROF_NSEC)
++# if defined(__wasi__)
++/*
++ * WASI (Tehboxen): no timers or signals to raise the flag, so timeouts never
++ * fire; only regexp / redraw time limits rely on them.
++ */
++static volatile sig_atomic_t timeout_flag = FALSE;
++
++    void
++stop_timeout(void)
++{
++    timeout_flag = FALSE;
++}
++
++    volatile sig_atomic_t *
++start_timeout(long msec UNUSED)
++{
++    timeout_flag = FALSE;
++    return &timeout_flag;
++}
++
++    void
++delete_timer(void)
++{
++}
++
++# elif defined(PROF_NSEC)
+ /*
+  * Implement timeout with timer_create() and timer_settime().
+  */
+diff --git a/src/term.c b/src/term.c
+index 52efae16c..1899ef7e0 100644
+--- a/src/term.c
++++ b/src/term.c
+@@ -2773,19 +2773,57 @@ tltoa(unsigned long i)
+ #ifndef HAVE_TGETENT
+ 
+ /*
+- * minimal tgoto() implementation.
+- * no padding and we only parse for %i %d and %+char
++ * tgoto() for builds without a termcap library (WASI): termcap-style %i %d
++ * %+c, and terminfo-style parameter strings (%p1 %d %c %{n} %'c' + - * / %m
++ * %< %> %= %? %t %e %;), as in the builtin xterm entries (mouse modes).
++ * Like ncurses, %p1 is "y" (the row) and %p2 is "x".
+  */
+     static char *
+ tgoto(char *cm, int x, int y)
+ {
+-    static char buf[30];
+-    char *p, *s, *e;
++    static char buf[80];
++    char	*s = buf, *e = buf + sizeof(buf) - 1;
++    long	params[2];
++    long	stack[16];
++    int		sp = 0;
+ 
+     if (!cm)
+-	return "OOPS";
+-    e = buf + 29;
+-    for (s = buf; s < e && *cm; cm++)
++	return "";
++    if (strstr(cm, "%p") == NULL && strstr(cm, "%?") == NULL)
++    {
++	// termcap style
++	for (; s < e && *cm; cm++)
++	{
++	    if (*cm != '%')
++	    {
++		*s++ = *cm;
++		continue;
++	    }
++	    switch (*++cm)
++	    {
++	    case 'd':
++		{
++		    char *p = (char *)tltoa((unsigned long)y);
++		    y = x;
++		    while (*p && s < e)
++			*s++ = *p++;
++		}
++		break;
++	    case 'i': x++; y++; break;
++	    case '+': *s++ = (char)(*++cm + y); y = x; break;
++	    case '%': *s++ = '%'; break;
++	    default: return "";
++	    }
++	}
++	*s = NUL;
++	return buf;
++    }
++
++    params[0] = y;
++    params[1] = x;
++#define PUSH(v) do { if (sp < 16) stack[sp++] = (v); } while (0)
++#define POP() (sp > 0 ? stack[--sp] : 0)
++    for (; *cm && s < e; cm++)
+     {
+ 	if (*cm != '%')
+ 	{
+@@ -2794,28 +2832,81 @@ tgoto(char *cm, int x, int y)
+ 	}
+ 	switch (*++cm)
+ 	{
++	case '%': *s++ = '%'; break;
++	case 'i': params[0]++; params[1]++; break;
++	case 'p': { int n = *++cm - '1'; PUSH(n >= 0 && n < 2 ? params[n] : 0); } break;
+ 	case 'd':
+-	    p = (char *)tltoa((unsigned long)y);
+-	    y = x;
+-	    while (*p)
+-		*s++ = *p++;
++	    {
++		char *p = (char *)tltoa((unsigned long)POP());
++		while (*p && s < e)
++		    *s++ = *p++;
++	    }
+ 	    break;
+-	case 'i':
+-	    x++;
+-	    y++;
++	case 'c': *s++ = (char)POP(); break;
++	case '\'': PUSH((unsigned char)cm[1]); cm += 2; break;
++	case '{':
++	    {
++		long v = 0;
++		for (++cm; *cm >= '0' && *cm <= '9'; ++cm)
++		    v = v * 10 + (*cm - '0');
++		PUSH(v);  // cm is at '}'
++	    }
+ 	    break;
+-	case '+':
+-	    *s++ = (char)(*++cm + y);
+-	    y = x;
++	case '+': { long b = POP(), a = POP(); PUSH(a + b); } break;
++	case '-': { long b = POP(), a = POP(); PUSH(a - b); } break;
++	case '*': { long b = POP(), a = POP(); PUSH(a * b); } break;
++	case '/': { long b = POP(), a = POP(); PUSH(b ? a / b : 0); } break;
++	case 'm': { long b = POP(), a = POP(); PUSH(b ? a % b : 0); } break;
++	case '<': { long b = POP(), a = POP(); PUSH(a < b); } break;
++	case '>': { long b = POP(), a = POP(); PUSH(a > b); } break;
++	case '=': { long b = POP(), a = POP(); PUSH(a == b); } break;
++	case '?': case ';': break;
++	case 't':
++	    if (!POP())
++	    {
++		// skip to the matching %e or %; at this nesting level
++		int level = 0;
++		for (++cm; *cm; ++cm)
++		{
++		    if (*cm != '%' || !cm[1])
++			continue;
++		    ++cm;
++		    if (*cm == '?')
++			level++;
++		    else if (*cm == ';' && level-- == 0)
++			break;
++		    else if (*cm == 'e' && level == 0)
++			break;
++		}
++		if (!*cm)
++		    --cm;
++	    }
+ 	    break;
+-	case '%':
+-	    *s++ = *cm;
++	case 'e':
++	    {
++		// reached from the "then" part: skip the "else" part
++		int level = 0;
++		for (++cm; *cm; ++cm)
++		{
++		    if (*cm != '%' || !cm[1])
++			continue;
++		    ++cm;
++		    if (*cm == '?')
++			level++;
++		    else if (*cm == ';' && level-- == 0)
++			break;
++		}
++		if (!*cm)
++		    --cm;
++	    }
+ 	    break;
+ 	default:
+-	    return "OOPS";
++	    break;
+ 	}
+     }
+-    *s = '\0';
++#undef PUSH
++#undef POP
++    *s = NUL;
+     return buf;
+ }
+ 

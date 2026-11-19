@@ -91,7 +91,125 @@ export class BashSession {
     this.kitty = null;
     this.tabPending = null;
     this.disposeData = null;
+    this.fgStack = []; // processes reading the terminal (innermost last)
     this.done = new Promise((resolve) => (this._resolve = resolve));
+  }
+
+  /* ---------- the terminal as a process's stdin (tty line discipline) ---------- */
+
+  get fg() {
+    return this.fgStack[this.fgStack.length - 1] || null;
+  }
+
+  /**
+   * A foreground process starts using the terminal (node.js runNode). Returns
+   * its tty: read(max) → bytes (empty = EOF), poll(ms) → input ready?,
+   * mode({ icanon, echo, isig, opost }), detach().
+   */
+  attachProcess() {
+    let fg = { icanon: true, echo: true, isig: true, opost: true, bytes: [], eof: 0, line: '', waiters: new Set() };
+    this.fgStack.push(fg);
+    let wake = () => {
+      for (let w of [...fg.waiters]) w();
+    };
+    fg.wake = wake;
+    let ready = () => fg.bytes.length > 0 || fg.eof > 0;
+    let wait = (ms) =>
+      new Promise((resolve) => {
+        let timer = null;
+        let done = () => {
+          fg.waiters.delete(done);
+          if (timer) clearTimeout(timer);
+          resolve();
+        };
+        fg.waiters.add(done);
+        if (ms >= 0) timer = setTimeout(done, ms);
+      });
+    return {
+      read: async (max) => {
+        while (!ready() && !fg.detached) await wait(-1);
+        if (!fg.bytes.length) {
+          if (fg.eof > 0) fg.eof--;
+          return new Uint8Array(0);
+        }
+        let n = Math.min(max, fg.bytes.length);
+        // Canonical mode hands out one line per read, like a real tty.
+        if (fg.icanon) {
+          let nl = fg.bytes.indexOf(10);
+          if (nl !== -1) n = Math.min(n, nl + 1);
+        }
+        return new Uint8Array(fg.bytes.splice(0, n));
+      },
+      poll: async (ms) => {
+        if (!ready() && ms !== 0) await wait(ms);
+        return ready();
+      },
+      mode: (m) => {
+        for (let k of ['icanon', 'echo', 'isig', 'opost']) if (k in m) fg[k] = !!m[k];
+        this.syncOutputMode();
+        return true;
+      },
+      detach: () => {
+        fg.detached = true;
+        wake();
+        let i = this.fgStack.indexOf(fg);
+        if (i !== -1) this.fgStack.splice(i, 1);
+        this.syncOutputMode();
+      },
+    };
+  }
+
+  /** Raw output (OPOST off) must reach xterm untranslated. */
+  syncOutputMode() {
+    let raw = this.fg && !this.fg.opost;
+    try {
+      this.term.options.convertEol = !raw;
+    } catch {}
+  }
+
+  /** Keys typed while a foreground process owns the terminal. */
+  feedForeground(fg, data) {
+    let enc = new TextEncoder();
+    if (fg.isig && data.includes('\u0003')) {
+      fg.line = '';
+      fg.bytes.length = 0;
+      this.term.write('^C');
+      this.shell.interrupt?.();
+      fg.wake();
+      return;
+    }
+    if (!fg.icanon) {
+      fg.bytes.push(...enc.encode(data));
+      fg.wake();
+      return;
+    }
+    for (let ch of data) {
+      if (ch === '\r' || ch === '\n') {
+        fg.bytes.push(...enc.encode(fg.line + '\n'));
+        fg.line = '';
+        if (fg.echo) this.term.write('\r\n');
+      } else if (ch === '\u007f' || ch === '\b') {
+        if (fg.line) {
+          fg.line = [...fg.line].slice(0, -1).join('');
+          if (fg.echo) this.term.write('\b \b');
+        }
+      } else if (ch === '\u0004') {
+        if (fg.line) {
+          fg.bytes.push(...enc.encode(fg.line));
+          fg.line = '';
+        } else fg.eof++;
+      } else if (ch === '\u0015') {
+        if (fg.echo) this.term.write('\b \b'.repeat([...fg.line].length));
+        fg.line = '';
+      } else if (ch === '\x1b' || (ch < ' ' && ch !== '\t')) {
+        // Escape sequences / other control keys: not line-editable here.
+        if (ch === '\x1b') return void fg.wake();
+      } else {
+        fg.line += ch;
+        if (fg.echo) this.term.write(ch);
+      }
+    }
+    fg.wake();
   }
 
   get home() {
@@ -176,6 +294,7 @@ export class BashSession {
 
   async onData(data) {
     if (this.ended || this.child) return; // a nested bash has the terminal
+    if (this.busy && !this.kitty && this.fg) return this.feedForeground(this.fg, data);
     if (this.busy && !this.kitty && data === '\u0003') {
       // Ctrl-C while a command runs: interrupt it (node gets SIGINT).
       this.term.write('^C');
@@ -315,7 +434,14 @@ export class BashSession {
       return;
     }
     let kittyMatch = /^(kitty)(?:\s+(.*))?$/i.exec(trimmed);
-    if (kittyMatch) return this.runKitty(kittyMatch[2] || '');
+    if (kittyMatch) {
+      let { isInstalled } = await import('./packages.js');
+      if (!(await isInstalled('kitty'))) {
+        this.term.write("Command 'kitty' not found, but can be installed with:\r\n  sudo pkg install kitty\r\n");
+        return;
+      }
+      return this.runKitty(kittyMatch[2] || '');
+    }
 
     this.busy = true;
     try {
@@ -323,7 +449,8 @@ export class BashSession {
       let live = (text) => {
         if (!text) return;
         streamed = text;
-        this.term.write(String(text).replace(/\r?\n/g, '\r\n'));
+        // Raw-mode programs (vim) position the cursor themselves: no newline translation.
+        this.term.write(this.fg && !this.fg.opost ? String(text) : String(text).replace(/\r?\n/g, '\r\n'));
       };
       // columns/rows make node's stdout a TTY of this size; tty lets `bash` start a nested session here.
       let result = await this.shell.withLive({ out: live, err: live, columns: this.term.cols, rows: this.term.rows, tty: this }, () => this.shell.run(trimmed));

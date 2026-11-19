@@ -440,7 +440,7 @@ async function main(init) {
     Module.Module = Module;
     return Module;
   };
-  builtins = createBuiltins({ rt, nodeFs, actor, env, moduleApi, exec: execAsync, execSync, tty: init.tty, sys, stdio: { stdin: () => stdinBytes, stdout: writeOut, stderr: writeErr } });
+  builtins = createBuiltins({ rt, nodeFs, actor, env, moduleApi, exec: execAsync, execSync, tty: init.tty, stdinTty: !!init.stdinTty, sys, stdio: { stdin: () => stdinBytes, stdout: writeOut, stderr: writeErr } });
   rt.process.getBuiltinModule = (id) => {
     let b = builtinName(id);
     return b ? builtins(b) : undefined;

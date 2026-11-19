@@ -11,6 +11,7 @@
  */
 import { createHost } from './host.js';
 import { serveWorker, SAB_SIZE } from './channel.js';
+import { spawnModuleWorker } from './spawn-worker.js';
 
 let enc = new TextEncoder();
 let dec = new TextDecoder();
@@ -18,6 +19,15 @@ let dec = new TextDecoder();
 let libCache = {};
 /** Toolchain assets from the first clang run: compiled WebAssembly.Modules + resource tarball bytes. */
 let toolCache = null;
+
+/**
+ * `pkg install clang`: fetch and compile the toolchain on the page now, and keep
+ * the result for the tool workers (first compile then starts in about a second).
+ */
+export async function installToolchain(progress) {
+  let { prefetchToolchain } = await import('./clang.js');
+  await prefetchToolchain(progress, (assets) => (toolCache = { ...assets, sysroots: toolCache?.sysroots }));
+}
 
 /* ---------- transform cache: Babel output per file, shared by all processes ---------- */
 
@@ -50,7 +60,7 @@ function xcSet(key, value) {
 
 let warm = null;
 function spawnWarm() {
-  let worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'node' });
+  let worker = spawnModuleWorker(new URL('./worker.js', import.meta.url), { name: 'node' });
   let onMessage = (ev) => {
     let m = ev.data || {};
     if (m.t === 'lib-cache') libCache[m.key] = m.body;
@@ -88,9 +98,9 @@ function takeWorker() {
   return w;
 }
 
-let NOT_ISOLATED = `node: this page is not cross-origin isolated, so node processes can't block on the filesystem.
+let notIsolated = (name) => `${name}: this page is not cross-origin isolated, so programs can't run here yet.
+  Reload the page (Safari/iOS: isolation comes from a service worker, set up on first load).
   In Webfoundry: Settings → Hardened isolation.
-  When deployed: serve COOP: same-origin and COEP: credentialless (see _headers).
 `;
 
 /**
@@ -108,11 +118,12 @@ let NOT_ISOLATED = `node: this page is not cross-origin isolated, so node proces
  */
 export async function runNode(argv, ctx) {
   if (!isolated()) {
+    let msg = notIsolated(ctx.name || ctx.tool?.name || 'node');
     if (ctx.live) {
-      ctx.live.err(NOT_ISOLATED);
+      ctx.live.err(msg);
       return { code: 1, stdout: '', stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: NOT_ISOLATED };
+    return { code: 1, stdout: '', stderr: msg };
   }
 
   let outChunks = [];
@@ -134,6 +145,20 @@ export async function runNode(argv, ctx) {
   let pid = ctx.pid;
   let sab = new SharedArrayBuffer(SAB_SIZE);
   let host = createHost({ actor: ctx.actor, hostname: ctx.env?.HOSTNAME, exec: ctx.exec });
+  // On a terminal with nothing piped in, stdin is the terminal: tty* syscalls go to it (other/bash.js).
+  let tty = ctx.live?.tty?.attachProcess && ctx.stdin == null ? ctx.live.tty : null;
+  let ttySession = tty?.attachProcess?.() || null;
+  let served = {
+    call(op, args) {
+      if (!op.startsWith('tty')) return host.call(op, args);
+      if (!ttySession) return Promise.reject({ __syserr: true, code: 'ENOTTY', errno: -25, syscall: op, message: 'ENOTTY: inappropriate ioctl for device' });
+      if (op === 'ttyRead') return ttySession.read(args.max || 4096);
+      if (op === 'ttyPoll') return ttySession.poll(args.timeout ?? -1);
+      if (op === 'ttyMode') return ttySession.mode(args);
+      if (op === 'ttySize') return { rows: tty.term?.rows || 24, cols: tty.term?.cols || 80 };
+      return host.call(op, args);
+    },
+  };
   let worker;
   try {
     let w = takeWorker();
@@ -152,6 +177,7 @@ export async function runNode(argv, ctx) {
       for (let off of watches.values()) off();
       worker.terminate();
       host.dispose();
+      ttySession?.detach();
       if (ctx.live) {
         let a = outDec.decode();
         let b = errDec.decode();
@@ -161,7 +187,7 @@ export async function runNode(argv, ctx) {
       resolve({ code, stdout: join(outChunks), stderr: join(errChunks) });
     };
 
-    serveWorker(worker, sab, host, (m) => {
+    serveWorker(worker, sab, served, (m) => {
       if (m.t === 'out') onOut(m.b);
       else if (m.t === 'err') onErr(m.b);
       else if (m.t === 'exit') finish(m.code);
@@ -203,6 +229,7 @@ export async function runNode(argv, ctx) {
       actor: ctx.actor,
       stdin,
       stdinPiped: ctx.stdin != null,
+      stdinTty: !!ttySession,
       // Output streaming straight to the Terminal = a TTY (like node in a real terminal).
       tty: ctx.live ? { columns: Number(ctx.live.columns) || 80, rows: Number(ctx.live.rows) || 24 } : null,
       sab,

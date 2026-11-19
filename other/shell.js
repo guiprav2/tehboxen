@@ -59,7 +59,13 @@ const cwd = process.cwd();
 const tehboxen = WebAssembly.Module.imports(mod).some((i) => i.module === 'tehboxen');
 const preopens = tehboxen ? { '.': cwd, '/': '/' } : { '/': '/', '.': cwd };
 if (cwd !== '/') preopens[cwd] = cwd;
-const wasi = new WASI({ version: 'preview1', args: [file, ...args], env: process.env, preopens });
+// On a terminal, programs without TIOCGWINSZ (vim, less…) size themselves from LINES/COLUMNS.
+const env = { ...process.env };
+if (process.stdout.isTTY) {
+  env.COLUMNS ??= String(process.stdout.columns || 80);
+  env.LINES ??= String(process.stdout.rows || 24);
+}
+const wasi = new WASI({ version: 'preview1', args: [file, ...args], env, preopens });
 if (WebAssembly.Module.imports(mod).some((i) => i.module === 'wasi' && i.name === 'thread-spawn')) {
   process.exitCode = await wasi.startThreads(mod, bytes);
 } else {
@@ -136,6 +142,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
   // line runs; only used when the command's stdout reaches the terminal
   // (last pipeline stage, no stdout redirect).
   let liveSink = null;
+  let groupStdin = null;
   let runAbort = null;
   let stageCtx = { tail: true, redirected: false };
   let optErrexit = false;
@@ -316,11 +323,29 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     let index = makeIndex(fs);
     let prevScript = currentScript;
     currentScript = text;
+    // On a terminal, `a; b` shows a's output before b runs (b may stream live, like pkg or node).
+    let streaming = liveSink && ast.commands?.length > 1;
+    let flush = (r) => {
+      if (r?.stdout) liveSink.out(r.stdout);
+      if (r?.stderr) liveSink.err(r.stderr);
+    };
     try {
-      return await evalStatements(index, ast.commands);
+      if (!streaming) return await evalStatements(index, ast.commands);
+      let code = 0;
+      for (let statement of ast.commands) {
+        let one = await evalStatements(index, [statement]);
+        flush(one);
+        code = one.code;
+        if (optErrexit && code) break;
+      }
+      return { code, stdout: '', stderr: '' };
     } catch (err) {
       if (err instanceof ShellExit) {
         lastStatus = err.exitCode;
+        if (streaming) {
+          flush(err);
+          return { code: err.exitCode, stdout: '', stderr: '', exit: true };
+        }
         return { code: err.exitCode, stdout: err.stdout || '', stderr: err.stderr || '', exit: true };
       }
       throw err;
@@ -529,6 +554,9 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
 
   async function evalPipelineNode(index, node, stdin) {
     if (!node) return { code: 0, stdout: '', stderr: '' };
+    // Inside `{ …; } < input` / `( … ) < input`, commands read the group's stdin.
+    // (Each command sees all of it: there is no shared read offset yet.)
+    if (stdin == null) stdin = groupStdin;
     if (node.type === 'Pipeline') return evalPipeline(index, node, stdin);
     if (node.type === 'Negation') {
       let inner = await evalPipelineNode(index, node.command, stdin);
@@ -538,7 +566,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     if (node.type === 'Command') return evalSimple(index, node, stdin);
     if (node.type === 'Redirected') {
       try {
-        return await routeCommand(index, node.redirects, stdin, () => evalPipelineNode(index, node.command, null));
+        return await routeCommand(index, node.redirects, stdin, (input) => evalPipelineNode(index, node.command, input ?? null));
       } catch (err) {
         if (err instanceof ShellExit) throw err;
         let message = (err && err.message) || String(err);
@@ -546,7 +574,15 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
         return { code: err && err.code || 1, stdout: '', stderr: message };
       }
     }
-    if (node.type === 'Subshell' || node.type === 'BraceGroup') return evalStatements(index, node.body.commands);
+    if (node.type === 'Subshell' || node.type === 'BraceGroup') {
+      let prev = groupStdin;
+      groupStdin = stdin;
+      try {
+        return await evalStatements(index, node.body.commands);
+      } finally {
+        groupStdin = prev;
+      }
+    }
     return { code: 1, stdout: '', stderr: `unsupported shell syntax: ${node.type}\n` };
   }
 
@@ -667,7 +703,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       let target = redir.target ? resolvePath(cwd, targetRaw, HOME) : '';
       let src = redir.descriptor?.type === 'FileDescriptor' ? redir.descriptor.value : null;
       if (op === '<' ) {
-        let text = await readFile(index, target);
+        let text = target === 'dev/null' ? '' : await readFile(index, target);
         if (text == null) throw shellError(`no such file or directory: ${target}`, 1);
         input = text;
         continue;
@@ -811,7 +847,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       else if (name === 'touch') result = await cmdTouch(index, args);
       else if (name === 'node' || name === 'nodejs') {
         try {
-          result = await cmdNode(args, stdin);
+          result = (await requirePackage(name)) || (await cmdNode(args, stdin));
         } finally {
           index.invalidate?.();
         }
@@ -858,7 +894,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
           result = ok('');
         }
       }
-      else if (name === 'type' || name === 'which' || (name === 'command' && (args[0] === '-v' || args[0] === '-V'))) result = cmdType(name, name === 'command' ? args.slice(1) : args);
+      else if (name === 'type' || name === 'which' || (name === 'command' && (args[0] === '-v' || args[0] === '-V'))) result = await cmdType(index, name, name === 'command' ? args.slice(1) : args);
       else if (name === 'command') result = args.length ? await dispatch(index, String(args[0]), args.slice(1), stdin, command) : ok('');
       else if (name === 'basename') result = cmdBasename(args);
       else if (name === 'dirname') result = cmdDirname(args);
@@ -867,12 +903,17 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       else if (name === 'bash' || name === 'sh' || name === 'boxsh') result = await cmdBash(index, name, args, stdin);
       else if (name === 'true' || name === ':') result = ok('');
       else if (name === 'false') result = { code: 1, stdout: '', stderr: '' };
-      else if (name === 'npm' || name === 'npx') result = await cmdNpm(name, args, stdin, index);
-      else if (TOOLCHAIN.has(name)) result = await cmdTool(name, args, stdin);
+      else if (name === 'npm' || name === 'npx') result = (await requirePackage(name)) || (await cmdNpm(name, args, stdin, index));
+      else if (name === 'pkg') result = await cmdPkg(args);
+      else if (name === 'git') result = (await requirePackage(name)) || (await cmdGit(args, index));
+      else if (TOOLCHAIN.has(name)) result = (await requirePackage(name)) || (await cmdTool(name, args, stdin));
       else {
         let exe = await findExecutable(index, String(name));
         if (!exe) {
           void command;
+          // Known but not installed: say how to get it (like Ubuntu's command-not-found).
+          let missing = !String(name).includes('/') && (await requirePackage(String(name)));
+          if (missing) return missing;
           throw shellError(`command not found: ${name}`, 127);
         }
         result = await runExecutable(index, exe, args, stdin);
@@ -2621,7 +2662,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     let text = (await readFile(index, exe.real)) || '';
     // WebAssembly: run it as a WASI preview1 program in a node process.
     if (text.startsWith('\u0000asm')) {
-      return cmdNode(['-e', WASM_RUNNER, '/' + exe.real, ...args.map((a) => String(a ?? ''))], stdin);
+      return cmdNode(['-e', WASM_RUNNER, '/' + exe.real, ...args.map((a) => String(a ?? ''))], stdin, exe.path.split('/').pop());
     }
     // Native executables (ELF and friends) can't run here, same message as bash on a foreign binary.
     if (/^(\x7fELF|MZ|\xcf\xfa\xed\xfe|\xca\xfe\xba\xbe)/.test(text) || text.slice(0, 1024).includes('\u0000')) {
@@ -2630,6 +2671,9 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     let first = text.split('\n', 1)[0];
     let argv = args.map((a) => String(a ?? ''));
     if (/^#!.*\bnode\b/.test(first) || (!first.startsWith('#!') && /\.(c|m)?js$/.test(exe.real))) {
+      // A node script needs the nodejs package (WASI programs above don't: they only borrow its workers).
+      let missing = await requirePackage('node');
+      if (missing) return { ...missing, stderr: `/${exe.real}: node: No such file or directory\n` + missing.stderr };
       return cmdNode(['/' + exe.real, ...argv], stdin);
     }
     if (first.startsWith('#!') && !/\b(sh|bash|boxsh|dash|zsh)\b/.test(first)) {
@@ -2782,6 +2826,41 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     });
   }
 
+  /**
+   * Commands from system packages (git, clang…) run only once the package is
+   * installed. Returns a command-not-found result with the install hint, or null.
+   */
+  async function requirePackage(name) {
+    let { packageFor, isInstalled } = await import('./packages.js');
+    let pkg = packageFor(name);
+    if (!pkg || (await isInstalled(pkg))) return null;
+    return { code: 127, stdout: '', stderr: `Command '${name}' not found, but can be installed with:\n  sudo pkg install ${pkg}\n` };
+  }
+
+  /** pkg: the package manager (other/pkg.js). */
+  async function cmdPkg(args) {
+    let { runPkg } = await import('./pkg.js');
+    let live = liveSink && stageCtx.tail && !stageCtx.redirected ? liveSink : null;
+    return runPkg(args.map((a) => String(a ?? '')), { actor: { ...actor }, live });
+  }
+
+  /** git: isomorphic-git on the VFS (other/git/git.js). */
+  async function cmdGit(args, index) {
+    let { runGit } = await import('./git/git.js');
+    let live = liveSink && stageCtx.tail && !stageCtx.redirected ? liveSink : null;
+    try {
+      return await runGit(args.map((a) => String(a ?? '')), {
+        cwd: cwd ? '/' + cwd : '/',
+        env: exportedEnv(),
+        actor: { ...actor, gids: [...(actor.gids || [])] },
+        exec: subshell,
+        live,
+      });
+    } finally {
+      index.invalidate?.();
+    }
+  }
+
   async function cmdNpm(name, args, stdin, index) {
     let { runNpm } = await import('./npm/npm.js');
     let live = liveSink && stageCtx.tail && !stageCtx.redirected ? liveSink : null;
@@ -2799,7 +2878,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     }
   }
 
-  async function cmdNode(args, stdin) {
+  async function cmdNode(args, stdin, name = 'node') {
     let { runNode } = await import('./node/node.js');
     let live = liveSink && stageCtx.tail && !stageCtx.redirected ? liveSink : null;
     return runNode(args.map((a) => String(a ?? '')), {
@@ -2812,10 +2891,11 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
       exec: subshell,
       pid: takePid(),
       ppid: shellPid,
+      name,
     });
   }
 
-  let BUILTINS = ['pwd', 'cd', 'ls', 'grep', 'cat', 'mkdir', 'rm', 'mv', 'cp', 'ln', 'addcontact', 'echo', 'printf', 'head', 'tail', 'find', 'sed', 'wc', 'touch', 'wf', 'export', 'unset', 'printenv', 'env', 'set', 'source', '.', 'whoami', 'id', 'groups', 'su', 'sudo', 'useradd', 'userdel', 'groupadd', 'groupdel', 'usermod', 'chmod', 'chown', 'chgrp', 'passwd', 'umask', 'true', 'false', ':', 'node', 'nodejs', 'npm', 'npx', ...TOOLCHAIN, 'jobs', 'wait', 'fg', 'bg', 'kill', 'sleep', 'exit', 'test', '[', 'shift', 'type', 'which', 'command', 'basename', 'dirname', 'date', 'seq', 'bash', 'sh', 'boxsh'];
+  let BUILTINS = ['pwd', 'cd', 'ls', 'grep', 'cat', 'mkdir', 'rm', 'mv', 'cp', 'ln', 'addcontact', 'echo', 'printf', 'head', 'tail', 'find', 'sed', 'wc', 'touch', 'wf', 'export', 'unset', 'printenv', 'env', 'set', 'source', '.', 'whoami', 'id', 'groups', 'su', 'sudo', 'useradd', 'userdel', 'groupadd', 'groupdel', 'usermod', 'chmod', 'chown', 'chgrp', 'passwd', 'umask', 'true', 'false', ':', 'jobs', 'wait', 'fg', 'bg', 'kill', 'sleep', 'exit', 'test', '[', 'shift', 'type', 'which', 'command', 'basename', 'dirname', 'date', 'seq', 'bash', 'sh', 'boxsh', 'pkg'];
 
   async function cmdSleep(args) {
     if (!args.length) throw shellError('sleep: missing operand', 1);
@@ -2897,16 +2977,28 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
     return { code: (await evalExpr(a)) ? 0 : 1, stdout: '', stderr: '' };
   }
 
-  function cmdType(name, args) {
+  async function cmdType(index, name, args) {
     let out = '';
+    let err = '';
     let code = 0;
     for (let a of args.map(String)) {
-      if (!BUILTINS.includes(a)) code = 1;
-      else if (name === 'type') out += `${a} is a shell builtin\n`;
-      else if (name === 'which') out += `/bin/${a}\n`;
-      else out += `${a}\n`;
+      if (BUILTINS.includes(a)) {
+        if (name === 'type') out += `${a} is a shell builtin\n`;
+        else if (name === 'which') out += `/bin/${a}\n`;
+        else out += `${a}\n`;
+        continue;
+      }
+      // Programs on $PATH (installed packages, npm bins, scripts).
+      let exe = await findExecutable(index, a).catch(() => null);
+      if (!exe) {
+        code = 1;
+        if (name === 'type') err += `${name}: ${a}: not found\n`;
+        continue;
+      }
+      let path = '/' + exe.path.replace(/^\/+/, '');
+      out += name === 'type' ? `${a} is ${path}\n` : `${path}\n`;
     }
-    return { code, stdout: out, stderr: '' };
+    return { code, stdout: out, stderr: err };
   }
 
   function cmdBasename(args) {
@@ -3329,6 +3421,7 @@ export function createShell(fs, { wfCursor = 'master', wfOptions, home = SHELL_H
   }
 
   async function writeFile(index, path, text) {
+    if (path === 'dev/null') return;
     await ensureParents(index, path);
     let existed = await existsFile(index, path);
     if (existed) await requireWrite(path);

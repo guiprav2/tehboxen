@@ -144,10 +144,13 @@ export default class DangerZone {
         // Host JS no longer embeds a demo cast. Reset leaves the empty OS
         // seed from vfs.factoryReset; restore world via Import pack.
         await factoryReset();
-        this.state.status = 'Factory reset done. Import a world pack for places/NPCs. Reloading…';
+        // Accounts are gone with the VFS: drop the login too and start over at the login screen.
+        let { clearSession, hardNavigate } = await import('../other/session.js');
+        clearSession();
+        this.state.status = 'Factory reset done. Create an account; import a world pack for places/NPCs.';
         this.state.confirmReset = '';
         d.update();
-        setTimeout(() => location.reload(), 600);
+        setTimeout(() => hardNavigate('index.html'), 600);
       } catch (err) {
         this.state.error = err?.message || String(err);
         this.state.status = '';

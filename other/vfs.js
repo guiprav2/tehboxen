@@ -2014,13 +2014,14 @@ export async function writeMany(entries, opts = {}) {
   let gid = opts.gid ?? ROOT_UID;
   let written = [];
   let dirs = new Set();
+  // Content writes go to IndexedDB in parallel; stats are saved once at the end.
+  let pending = [];
   for (let e of entries) {
     let key = normalize(e.path);
     if (!key) continue;
     let data = e.data instanceof Uint8Array ? new Blob([e.data]) : e.data ?? '';
     let prev = stats[key];
-    if (prev?.ino != null) await store.setItem(inodeKey(prev.ino), data);
-    else await store.setItem(key, data);
+    pending.push(prev?.ino != null ? store.setItem(inodeKey(prev.ino), data) : store.setItem(key, data));
     stats[key] = {
       ...(prev?.ino != null ? { ino: prev.ino, nlink: prev.nlink } : {}),
       kind: 'file',
@@ -2033,6 +2034,7 @@ export async function writeMany(entries, opts = {}) {
     let parts = key.split('/');
     for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
   }
+  await Promise.all(pending);
   let newDirs = [];
   for (let dir of [...dirs].sort()) {
     if (stats[dir]?.kind === 'dir' || (await store.getItem(dir + '/.keep')) != null) continue;

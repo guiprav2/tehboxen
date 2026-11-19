@@ -1291,7 +1291,7 @@ export function createBuiltins(ctx) {
     domain: () => ({ create: () => Object.assign(new EventEmitter(), { run: (fn) => fn(), add() {}, remove() {}, bind: (f) => f, intercept: (f) => f, dispose() {} }) }),
     trace_events: () => ({ createTracing: () => ({ enable() {}, disable() {} }), getEnabledCategories: () => '' }),
     repl: () => ({ start: enosys('repl.start()') }),
-    wasi: () => createWasiModule({ sys: ctx.sys, path, stdio: ctx.stdio, cwd: () => rt.process.cwd(), exit: (c) => rt.process.exit(c), ref: () => rt.ref() }),
+    wasi: () => createWasiModule({ sys: ctx.sys, path, stdio: ctx.stdio, cwd: () => rt.process.cwd(), exit: (c) => rt.process.exit(c), ref: () => rt.ref(), tty: { stdin: !!ctx.stdinTty, stdout: !!ctx.tty }, ids: () => [Number(ctx.actor?.uid) || 0, Number(ctx.actor?.gid) || 0] }),
     net: () => ({ ...stubModule('net', ['createServer', 'createConnection', 'connect']), Socket: enosys('net.Socket'), Server: enosys('net.Server'), isIP: (s) => (/^(\d{1,3}\.){3}\d{1,3}$/.test(s) ? 4 : s.includes(':') ? 6 : 0), isIPv4: (s) => /^(\d{1,3}\.){3}\d{1,3}$/.test(s), isIPv6: (s) => s.includes(':') }),
     http: () => ({ ...stubModule('http', ['createServer', 'request', 'get']), STATUS_CODES: { 200: 'OK', 201: 'Created', 204: 'No Content', 301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable' }, METHODS: ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT'], Agent: class {}, globalAgent: {} }),
     https: () => ({ ...stubModule('https', ['createServer', 'request', 'get']), Agent: class {}, globalAgent: {} }),

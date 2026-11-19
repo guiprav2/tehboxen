@@ -19,6 +19,8 @@
  * (clocks, random, args, sleeps) run in the calling thread.
  */
 
+import { spawnModuleWorker } from './spawn-worker.js';
+
 let E = {
   SUCCESS: 0, '2BIG': 1, ACCES: 2, AGAIN: 6, BADF: 8, EXIST: 20, FAULT: 21, FBIG: 22, INVAL: 28, IO: 29, ISDIR: 31,
   LOOP: 32, MFILE: 33, NAMETOOLONG: 37, NOENT: 44, NOSYS: 52, NOTDIR: 54, NOTEMPTY: 55, NOTSUP: 58, NOTTY: 59,
@@ -179,7 +181,7 @@ export function createWasiModule(ctx) {
           if (tid > 0x1fffffff) return -1;
           let worker;
           try {
-            worker = new Worker(new URL('./wasi-thread.js', import.meta.url), { type: 'module', name: main ? 'wasi-main' : 'wasi-thread-' + tid });
+            worker = spawnModuleWorker(new URL('./wasi-thread.js', import.meta.url), { name: main ? 'wasi-main' : 'wasi-thread-' + tid });
           } catch {
             return -1;
           }
@@ -316,6 +318,71 @@ export function createWasiModule(ctx) {
     _tehboxenImports() {
       let self = this;
       return {
+        /** Terminal modes from tcsetattr (libtehboxen): canonical/echo/signals/output processing. */
+        tty_mode(icanon, echo, isig, opost) {
+          if (!ctx.tty?.stdin && !ctx.tty?.stdout) return -1;
+          try {
+            sys.sync('ttyMode', { icanon: !!icanon, echo: !!echo, isig: !!isig, opost: !!opost });
+            return 0;
+          } catch {
+            return -1;
+          }
+        },
+        /** Permission bits of an absolute path (WASI's filestat has none), or -1. */
+        mode(ptr, len) {
+          if (!ctx.sys) return -1;
+          let path = dec.decode(new Uint8Array(self.memory.buffer).slice(ptr, ptr + len));
+          try {
+            return sys.sync('stat', { path, follow: true }).mode & 0o7777;
+          } catch {
+            return -1;
+          }
+        },
+        /** [mode, uid, gid] of an absolute path into out (3 × u32); 0, or -1 if missing. */
+        owner(ptr, len, follow, out) {
+          if (!ctx.sys) return -1;
+          let path = dec.decode(new Uint8Array(self.memory.buffer).slice(ptr, ptr + len));
+          try {
+            let s = sys.sync('stat', { path, follow: !!follow });
+            let v = new DataView(self.memory.buffer);
+            v.setUint32(out, s.mode & 0o7777, true);
+            v.setUint32(out + 4, s.uid >>> 0, true);
+            v.setUint32(out + 8, s.gid >>> 0, true);
+            return 0;
+          } catch {
+            return -1;
+          }
+        },
+        /** Same for an open fd (files and directories this process opened). */
+        fd_owner(fd, out) {
+          let f = self.fds.get(fd);
+          if (!f?.path || !ctx.sys) return -1;
+          try {
+            let s = sys.sync('stat', { path: f.path, follow: true });
+            let v = new DataView(self.memory.buffer);
+            v.setUint32(out, s.mode & 0o7777, true);
+            v.setUint32(out + 4, s.uid >>> 0, true);
+            v.setUint32(out + 8, s.gid >>> 0, true);
+            return 0;
+          } catch {
+            return -1;
+          }
+        },
+        /** (uid << 32) | gid of the process's user. */
+        ids() {
+          let [uid, gid] = ctx.ids?.() || [0, 0];
+          return (BigInt(uid >>> 0) << 32n) | BigInt(gid >>> 0);
+        },
+        /** (rows << 16) | cols, or -1 when not on a terminal. */
+        tty_size() {
+          if (!ctx.tty?.stdin && !ctx.tty?.stdout) return -1;
+          try {
+            let { rows, cols } = sys.sync('ttySize', {});
+            return ((rows & 0xffff) << 16) | (cols & 0xffff);
+          } catch {
+            return -1;
+          }
+        },
         getcwd(ptr, len) {
           let cwd = enc.encode(ctx.cwd());
           if (cwd.length > len) return -1;
@@ -437,6 +504,19 @@ export function createWasiModule(ctx) {
         let b = bytes();
         if (f.kind === 'stdio') {
           if (f.stdio !== 0) throw new WASIError(E.BADF);
+          if (ctx.tty?.stdin) {
+            // A terminal: block until the user types (a line, or keys in raw mode); empty = EOF (Ctrl-D).
+            let want = iovs.reduce((n, [, len]) => n + len, 0);
+            let data = new Uint8Array(sys.sync('ttyRead', { max: want }));
+            let o = 0;
+            for (let [buf, len] of iovs) {
+              let n = Math.min(len, data.length - o);
+              b.set(data.subarray(o, o + n), buf);
+              o += n;
+              if (o >= data.length) break;
+            }
+            return data.length;
+          }
           let input = ctx.stdio.stdin();
           for (let [buf, len] of iovs) {
             let chunk = input.subarray(self.stdinPos, self.stdinPos + len);
@@ -539,7 +619,9 @@ export function createWasiModule(ctx) {
           let v = view();
           v.setUint8(ptr, f.kind === 'stdio' ? FILETYPE.chr : f.kind === 'dir' ? FILETYPE.dir : FILETYPE.file);
           v.setUint16(ptr + 2, f.flags || 0, true);
-          v.setBigUint64(ptr + 8, f.rights ?? ALL_RIGHTS, true);
+          // isatty(): a character device without seek/tell rights.
+          let tty = f.kind === 'stdio' && (f.stdio === 0 ? ctx.tty?.stdin : ctx.tty?.stdout);
+          v.setBigUint64(ptr + 8, tty ? ALL_RIGHTS & ~(RIGHT.FD_SEEK | RIGHT.FD_TELL) : (f.rights ?? ALL_RIGHTS), true);
           v.setBigUint64(ptr + 16, f.inheriting ?? ALL_RIGHTS, true);
         }),
         fd_fdstat_set_flags: wrap((fd, flags) => {
@@ -809,6 +891,7 @@ export function createWasiModule(ctx) {
           let events = [];
           let wait = Infinity;
           let clocks = [];
+          let ttyWaits = [];
           for (let i = 0; i < nsubs; i++) {
             let s = inPtr + i * 48;
             let userdata = v.getBigUint64(s, true);
@@ -823,10 +906,20 @@ export function createWasiModule(ctx) {
               wait = Math.min(wait, Math.max(0, ms));
             } else {
               let fd = v.getUint32(s + 16, true);
-              events.push({ userdata, error: self.fds.has(fd) ? 0 : E.BADF, type: tag, nbytes: 0n });
+              let f = self.fds.get(fd);
+              // Reading a terminal: ready only once there is input (checked below, with the timeout).
+              if (tag === 1 && f?.kind === 'stdio' && f.stdio === 0 && ctx.tty?.stdin) ttyWaits.push({ userdata });
+              else events.push({ userdata, error: f ? 0 : E.BADF, type: tag, nbytes: 1n });
             }
           }
-          if (!events.length && clocks.length) {
+          if (ttyWaits.length && !events.length) {
+            let ready = sys.sync('ttyPoll', { timeout: wait === Infinity ? -1 : Math.max(0, Math.round(wait)) });
+            if (ready) for (let t of ttyWaits) events.push({ userdata: t.userdata, error: 0, type: 1, nbytes: 1n });
+            else for (let c of clocks) if (c.ms <= wait) events.push({ userdata: c.userdata, error: 0, type: 0, nbytes: 0n });
+          } else if (ttyWaits.length) {
+            if (sys.sync('ttyPoll', { timeout: 0 })) for (let t of ttyWaits) events.push({ userdata: t.userdata, error: 0, type: 1, nbytes: 1n });
+          }
+          if (!events.length && !ttyWaits.length && clocks.length) {
             sleep(wait);
             for (let c of clocks) if (c.ms <= wait) events.push({ userdata: c.userdata, error: 0, type: 0, nbytes: 0n });
           }

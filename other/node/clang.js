@@ -116,10 +116,10 @@ function loadLibTehboxen() {
       if (!res.ok) throw new Error(`${p}: ${res.status}`);
       return new Uint8Array(await res.arrayBuffer());
     };
-    let [compat, wait, lib, libThreads] = await Promise.all([get('compat.h'), get('include/sys/wait.h'), get('lib/wasm32-wasip1/libtehboxen.a'), get('lib/wasm32-wasip1-threads/libtehboxen.a')]);
+    let [compat, wait, termios, pwd, grp, lib, libThreads] = await Promise.all(['compat.h', 'include/sys/wait.h', 'include/termios.h', 'include/pwd.h', 'include/grp.h', 'lib/wasm32-wasip1/libtehboxen.a', 'lib/wasm32-wasip1-threads/libtehboxen.a'].map(get));
     return {
       'compat.h': compat,
-      include: { sys: { 'wait.h': wait } },
+      include: { sys: { 'wait.h': wait }, 'termios.h': termios, 'pwd.h': pwd, 'grp.h': grp },
       lib: { 'wasm32-wasip1': { 'libtehboxen.a': lib }, 'wasm32-wasip1-threads': { 'libtehboxen.a': libThreads } },
     };
   })();
@@ -588,6 +588,15 @@ let LLVM_TOOLS = {
 let CLANG = { clang: 'clang', 'clang++': 'clang++', cc: 'clang', 'c++': 'clang++', gcc: 'clang', 'g++': 'clang++' };
 
 /** Shell commands this runner provides. */
+/**
+ * Download (into the browser's HTTP cache) and compile the toolchain ahead of
+ * time (`pkg install clang`). progress(done, total) in bytes; onCacheable gets
+ * the compiled modules and resource tarball for the page's tool cache.
+ */
+export async function prefetchToolchain(progress, onCacheable) {
+  await Promise.all([loadAssets(progress, null, onCacheable), loadLibTehboxen()]);
+}
+
 export let TOOL_NAMES = [...Object.keys(CLANG), ...Object.keys(LLVM_TOOLS)];
 
 /**
@@ -714,7 +723,7 @@ export async function runTool(o) {
   // libtehboxen: declarations on every compile, the library on every link (see loadLibTehboxen).
   if (usr.tehboxen && !args.some((a) => a === '-nostdinc' || a === '-ffreestanding')) args.unshift('-include', '/usr/tehboxen/compat.h', '-idirafter', '/usr/tehboxen/include');
   if (usr.tehboxen && !compileOnly && !args.some((a) => a === '-nostdlib' || a === '-nodefaultlibs')) {
-    args.push(`-L/usr/tehboxen/lib/${wantsThreads ? 'wasm32-wasip1-threads' : 'wasm32-wasip1'}`, '-Wl,--export=__tehboxen_init', '-ltehboxen');
+    args.push(`-L/usr/tehboxen/lib/${wantsThreads ? 'wasm32-wasip1-threads' : 'wasm32-wasip1'}`, '-Wl,--export=__tehboxen_init', '-Wl,--wrap=stat,--wrap=lstat,--wrap=fstat,--wrap=fstatat', '-ltehboxen');
   }
   // Informational invocations and -### itself run in one step, no jobs.
   if (!args.length || args.some((a) => /^(-###|--version|--help|-help|--help-hidden|-dumpversion|-dumpmachine|-print-[\w-]+(=.*)?)$/.test(a))) {

@@ -323,6 +323,17 @@ export default class Desktop {
         hardNavigate('index.html');
         return;
       }
+      // A session for a user that no longer exists (factory reset, another tab): log in again.
+      if (!location.pathname.startsWith('/files/')) {
+        let vfs = await import('../other/vfs.js');
+        await vfs.ensureReady();
+        let user = await vfs.getUser(readSession().user).catch(() => null);
+        if (!user?.human) {
+          clearSession();
+          hardNavigate('index.html');
+          return;
+        }
+      }
       this.actions.tickClock();
       if (this.state._clockTimer) clearInterval(this.state._clockTimer);
       this.state._clockTimer = setInterval(() => {

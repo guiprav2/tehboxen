@@ -1,0 +1,11 @@
+" Tehboxen system vimrc ($VIM/vimrc = /usr/local/share/vim/vimrc), from ports/vim/extras/vimrc.
+" Loaded before ~/.vimrc, so a user vimrc can override any of it (e.g. colorscheme monokai).
+set nocompatible
+syntax on
+filetype plugin indent on
+" The Terminal is xterm.js with truecolor; 256-color fallback otherwise.
+if has('termguicolors') && $COLORTERM =~# 'truecolor\|24bit'
+  set termguicolors
+endif
+set background=dark
+silent! colorscheme molokai

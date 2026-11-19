@@ -34,7 +34,7 @@ async function parseKittyCli(argv = []) {
     .name('kitty')
     .description('KittyGPT interactive CLI')
     .argument('[state]', 'JSON file to load/save conversation state')
-    .option('--model <model>', 'Model specifier (oai:*, oail:*, xai:*)')
+    .option('--model <model>', 'Model specifier (oai:*, oail:*, xai:*; default $KITTY_DEFAULT_MODEL or xai:grok-4.5)')
     .option(
       '--image-model <model>',
       'Image tool model (oai:*, oail:*, xai:*). Defaults to the chat model',
@@ -262,7 +262,8 @@ export async function startKitty({
   kittyst = normalizeContextState(
     kittyst || {
       options: {
-        model: opts.model || 'xai:grok-4',
+        // Default model: $KITTY_DEFAULT_MODEL from the shell or ~/.kittygpt/.env.
+        model: opts.model || shell?.env?.KITTY_DEFAULT_MODEL || env.KITTY_DEFAULT_MODEL || 'xai:grok-4.5',
         cid: uuid(),
         instructions: null,
         reasoning: opts.reasoning

@@ -42,6 +42,33 @@ try {
   if (/[?&]isolate=/.test(location.search)) sessionStorage.setItem(SEARCH_KEY, location.search);
 } catch {}
 
+/**
+ * Cross-origin isolation (SharedArrayBuffer for node/WASI processes). Netlify's
+ * COEP credentialless isolates Chrome/Firefox; WebKit (Safari, all iOS
+ * browsers) only knows require-corp, which coi-sw.js adds. Register it when
+ * the page isn't isolated (outside Webfoundry previews) and reload once.
+ */
+function ensureIsolation() {
+  if (globalThis.crossOriginIsolated || !globalThis.navigator?.serviceWorker || !globalThis.isSecureContext) return;
+  if (/^\/(files|preview)\//.test(location.pathname) || /[?&]isolate=/.test(location.search)) return;
+  let RELOADED = 'tehboxen.coiReload';
+  navigator.serviceWorker
+    .register('/coi-sw.js', { scope: '/' })
+    .then(async () => {
+      await navigator.serviceWorker.ready;
+      try {
+        // Already reloaded under the worker and still not isolated: don't loop.
+        if (sessionStorage.getItem(RELOADED)) return;
+        sessionStorage.setItem(RELOADED, '1');
+      } catch {
+        return;
+      }
+      location.reload();
+    })
+    .catch((err) => console.warn('coi-sw', err));
+}
+ensureIsolation();
+
 /** Full page load to another page, keeping the preview's query string. */
 export function hardNavigate(page) {
   let url = new URL(page, location.href);

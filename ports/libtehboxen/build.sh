@@ -1,0 +1,15 @@
+#!/bin/sh
+# libtehboxen: system()/popen(), termios, pwd/grp, ids, fork stubs and the cwd init for WASI
+# programs (see tehboxen.c). Headers live in toolchain/libtehboxen (they are what the
+# in-box clang mounts at /usr/tehboxen); this builds the archives next to them.
+. "$(dirname "$0")/../env.sh"
+"$PORTS/wasi-sdk.sh"
+OUT=$TEHBOXEN/toolchain/libtehboxen
+for t in wasm32-wasip1 wasm32-wasip1-threads; do
+  F=""; [ $t = wasm32-wasip1-threads ] && F="-pthread"
+  mkdir -p "$OUT/lib/$t"
+  "$WASI_SDK/bin/clang" --target=$t --sysroot="$WASI_SDK/share/wasi-sysroot" -I"$OUT/include" -include "$OUT/compat.h" \
+    -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_GETPID $F -O2 -c "$PORTS/libtehboxen/tehboxen.c" -o "$WORK/tehboxen-$t.o"
+  rm -f "$OUT/lib/$t/libtehboxen.a"
+  "$WASI_SDK/bin/llvm-ar" rcs "$OUT/lib/$t/libtehboxen.a" "$WORK/tehboxen-$t.o"
+done

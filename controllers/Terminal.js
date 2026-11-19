@@ -336,14 +336,21 @@ export default class TerminalCtrl {
       this._fitSafe();
     },
 
+    // Keep focus on the terminal (and the phone's keyboard open), like the other soft keys.
     toggleCtrl: () => {
       this.state.modCtrl = !this.state.modCtrl;
       this._bindStickyCapture();
+      try {
+        this._term?.focus?.();
+      } catch {}
     },
 
     toggleAlt: () => {
       this.state.modAlt = !this.state.modAlt;
       this._bindStickyCapture();
+      try {
+        this._term?.focus?.();
+      } catch {}
     },
 
     /** Soft-key press from the mobile keybar. */
